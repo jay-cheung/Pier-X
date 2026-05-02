@@ -133,19 +133,21 @@ pub enum EgressKind {
         /// References an [`crate::ssh::SshConfig`] by name.
         via_connection: String,
     },
-    /// Userspace WireGuard. Stage B.
+    /// WireGuard via system `wg-quick` subprocess. The actual peer
+    /// config (Interface PrivateKey, Peer PublicKey, AllowedIPs,
+    /// Endpoint, …) lives in a standard wg-quick `.conf` file the
+    /// user supplies — Pier-X never sees the private key, just
+    /// hands the path to `wg-quick up`.
+    ///
+    /// `conf_path` empty → falls back to
+    /// `~/.config/pier-x/egress/<profile-id>.conf` (legacy default,
+    /// useful if you want one profile per app-managed file).
     Wireguard {
-        /// Endpoint `host:port`.
-        endpoint: String,
-        /// Local interface address with CIDR (e.g. `10.0.0.2/32`).
-        address: String,
-        /// AllowedIPs CIDRs.
+        /// Absolute path to a wg-quick compatible `.conf` file.
+        /// Empty / omitted → the default per-profile path under
+        /// the app data dir.
         #[serde(default)]
-        allowed_ips: Vec<String>,
-        /// Reference to the WG private key in the keyring.
-        private_key: EgressAuthRef,
-        /// Peer public key (base64).
-        peer_public_key: String,
+        conf_path: String,
     },
     /// External VPN binary (openvpn / openconnect). Stage B+.
     /// Cargo feature `egress-external-vpn` will gate the actual
@@ -359,6 +361,57 @@ pub fn lookup<'a>(profiles: &'a [EgressProfile], id: Option<&str>) -> Option<&'a
     profiles.iter().find(|p| p.id == id)
 }
 
+/// Outcome of [`probe_tcp`] — measured TCP-handshake latency or a
+/// typed error wrapped into a string.
+#[derive(Debug, Clone)]
+pub struct ProbeOutcome {
+    /// Round-trip duration of the dial. Always populated — even on
+    /// failure, this is the time spent before erroring out, which
+    /// helps tell "instant refusal" from "slow timeout" apart.
+    pub elapsed: std::time::Duration,
+    /// `Ok(())` on success; `Err(message)` on failure. The byte
+    /// stream is dropped immediately — this is a reachability
+    /// probe, not a real connection.
+    pub result: Result<(), String>,
+}
+
+/// Reachability probe: dial `host:port` through `profile` (or
+/// directly when `profile = None`), wait at most `timeout`, then
+/// drop the resulting stream. Used by the "Test connection" button
+/// in the egress profile editor.
+pub async fn probe_tcp(
+    profile: Option<&EgressProfile>,
+    target_host: &str,
+    target_port: u16,
+    timeout: std::time::Duration,
+    ctx: Option<&dyn EgressContext>,
+) -> ProbeOutcome {
+    let started = std::time::Instant::now();
+    let dial = resolve_tcp_with(profile, target_host, target_port, ctx);
+    let outcome = match tokio::time::timeout(timeout, dial).await {
+        Ok(Ok(_stream)) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err(format!("probe deadline ({timeout:?}) exceeded")),
+    };
+    ProbeOutcome {
+        elapsed: started.elapsed(),
+        result: outcome,
+    }
+}
+
+/// Sync wrapper for [`probe_tcp`]. Runs on the shared runtime so
+/// the caller doesn't have to spin up its own.
+pub fn probe_tcp_blocking(
+    profile: Option<&EgressProfile>,
+    target_host: &str,
+    target_port: u16,
+    timeout: std::time::Duration,
+    ctx: Option<&dyn EgressContext>,
+) -> ProbeOutcome {
+    crate::ssh::runtime::shared()
+        .block_on(probe_tcp(profile, target_host, target_port, timeout, ctx))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,13 +434,7 @@ mod tests {
             id: "w".into(),
             name: "wg".into(),
             kind: EgressKind::Wireguard {
-                endpoint: "vpn.example.com:51820".into(),
-                address: "10.0.0.2/32".into(),
-                allowed_ips: vec!["10.0.0.0/24".into()],
-                private_key: EgressAuthRef {
-                    credential_id: "pier-x.egress.w".into(),
-                },
-                peer_public_key: "AAAA".into(),
+                conf_path: String::new(),
             },
             dns: None,
         };

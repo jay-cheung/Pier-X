@@ -1,10 +1,11 @@
-import { Plus, Shield, Trash2, X } from "lucide-react";
+import { Plus, Shield, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import IconButton from "../components/IconButton";
 import { useDraggableDialog } from "../components/useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
+import { egressProfileTest, type EgressProbeResult } from "../lib/commands";
 import type { EgressProfile } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useEgressStore } from "../stores/useEgressStore";
@@ -28,12 +29,9 @@ type Draft = {
   auth: DraftAuth;
   /** ssh_jump only: name of a saved SSH connection to jump through. */
   viaConnection: string;
-  /** wireguard only: AllowedIPs / endpoint / address (informational —
-   *  the actual config lives in `~/.config/pier-x/egress/<id>.conf`). */
-  wgEndpoint: string;
-  wgAddress: string;
-  wgAllowedIps: string;
-  wgPeerKey: string;
+  /** wireguard only: absolute path to a wg-quick .conf file. Empty
+   *  string means the app-managed default slot. */
+  wgConfPath: string;
   /** external_vpn: engine choice + config path. */
   vpnEngine: "open_vpn" | "open_connect";
   vpnConfig: string;
@@ -57,10 +55,7 @@ function emptyDraft(): Draft {
     useAuth: false,
     auth: { user: "", password: "", dirty: false },
     viaConnection: "",
-    wgEndpoint: "",
-    wgAddress: "",
-    wgAllowedIps: "",
-    wgPeerKey: "",
+    wgConfPath: "",
     vpnEngine: "open_vpn",
     vpnConfig: "",
     dns: "auto",
@@ -80,10 +75,7 @@ function toDraft(profile: EgressProfile): Draft {
     useAuth: false,
     auth: { user: "", password: "", dirty: false },
     viaConnection: "",
-    wgEndpoint: "",
-    wgAddress: "",
-    wgAllowedIps: "",
-    wgPeerKey: "",
+    wgConfPath: "",
     vpnEngine: "open_vpn",
     vpnConfig: "",
     dns:
@@ -108,10 +100,7 @@ function toDraft(profile: EgressProfile): Draft {
     base.viaConnection = profile.viaConnection;
   } else if (profile.kind === "wireguard") {
     base.kind = "wireguard";
-    base.wgEndpoint = profile.endpoint;
-    base.wgAddress = profile.address;
-    base.wgAllowedIps = profile.allowedIps.join(", ");
-    base.wgPeerKey = profile.peerPublicKey;
+    base.wgConfPath = profile.confPath;
   } else if (profile.kind === "external_vpn") {
     base.kind = "external_vpn";
     base.vpnEngine = profile.engine;
@@ -142,19 +131,11 @@ function buildProfile(draft: Draft): EgressProfile {
     };
   }
   if (draft.kind === "wireguard") {
-    const credentialId = `pier-x.egress.${draft.id}`;
     return {
       id: draft.id,
       name: draft.name.trim() || draft.id,
       kind: "wireguard",
-      endpoint: draft.wgEndpoint.trim(),
-      address: draft.wgAddress.trim(),
-      allowedIps: draft.wgAllowedIps
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      privateKey: { credentialId },
-      peerPublicKey: draft.wgPeerKey.trim(),
+      confPath: draft.wgConfPath.trim(),
       dns,
     };
   }
@@ -185,20 +166,39 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
   const { t } = useI18n();
   const formatError = (e: unknown) => localizeError(e, t);
   const { dialogStyle, handleProps } = useDraggableDialog(open);
-  const { profiles, refresh, save, remove, setBasicAuth, clearCredential, vpnStart, vpnStop } =
-    useEgressStore();
+  const {
+    profiles,
+    vpnStatus,
+    refresh,
+    save,
+    remove,
+    setBasicAuth,
+    clearCredential,
+    vpnStart,
+    vpnStop,
+    refreshVpnStatus,
+  } = useEgressStore();
   const { connections, refresh: refreshConnections } = useConnectionStore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(() => emptyDraft());
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [probe, setProbe] = useState<EgressProbeResult | null>(null);
+  const [probing, setProbing] = useState(false);
 
   useEffect(() => {
     if (open) {
       void refresh();
       void refreshConnections();
+      void refreshVpnStatus();
     }
-  }, [open, refresh, refreshConnections]);
+  }, [open, refresh, refreshConnections, refreshVpnStatus]);
+
+  // Clear stale probe results whenever the user switches profiles
+  // — a green check from one profile is misleading for another.
+  useEffect(() => {
+    setProbe(null);
+  }, [selectedId, draft.kind]);
 
   // Reset selection when dialog opens, prefer first profile if any.
   useEffect(() => {
@@ -256,10 +256,9 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
       setError(t("Choose a saved SSH connection to jump through."));
       return;
     }
-    if (draft.kind === "wireguard" && !draft.wgEndpoint.trim()) {
-      setError(t("WireGuard endpoint (host:port) must not be empty."));
-      return;
-    }
+    // WireGuard `conf_path` may be empty — backend then falls back to
+    // ~/.config/pier-x/egress/<id>.conf. No client-side check needed;
+    // a missing file surfaces as a typed error on Start VPN.
     if (draft.kind === "external_vpn" && !draft.vpnConfig.trim()) {
       setError(t("VPN config path / hostname must not be empty."));
       return;
@@ -318,6 +317,29 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
     }
   }
 
+  /// Probe the *saved* version of the selected profile (so the
+  /// caller can verify "the thing on disk works" rather than
+  /// "the half-edited form would work"). Pre-saved profiles can
+  /// still be probed without selecting one — id = null = direct.
+  async function handleTest() {
+    if (probing) return;
+    setProbing(true);
+    setProbe(null);
+    try {
+      const result = await egressProfileTest(selectedId, undefined, undefined);
+      setProbe(result);
+    } catch (e) {
+      setProbe({
+        ok: false,
+        latencyMs: null,
+        error: formatError(e),
+        target: "1.1.1.1:443",
+      });
+    } finally {
+      setProbing(false);
+    }
+  }
+
   async function handleDelete() {
     if (!selectedId || busy) return;
     if (!window.confirm(t("Delete this egress profile? Connections that referenced it will fall back to direct."))) {
@@ -353,26 +375,56 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
             {sortedProfiles.length === 0 && (
               <div className="dlg-row-hint">{t("No egress profiles yet.")}</div>
             )}
-            {sortedProfiles.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={"dlg-opt" + (selectedId === p.id ? " active" : "")}
-                onClick={() => selectProfile(p.id)}
-                style={{ justifyContent: "flex-start", textAlign: "left" }}
-              >
-                <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
-                  <span>{p.name || p.id}</span>
-                  <span className="dlg-row-hint" style={{ fontSize: "var(--size-micro)" }}>
-                    {p.kind}
-                    {(p.kind === "socks5" || p.kind === "http") && ` ${p.host}:${p.port}`}
-                    {p.kind === "ssh_jump" && ` via ${p.viaConnection}`}
-                    {p.kind === "wireguard" && ` ${p.endpoint}`}
-                    {p.kind === "external_vpn" && ` ${p.engine}`}
+            {sortedProfiles.map((p) => {
+              const isVpn = p.kind === "wireguard" || p.kind === "external_vpn";
+              const status = isVpn ? vpnStatus[p.id] : undefined;
+              const dotColor =
+                status === true
+                  ? "var(--pos)"
+                  : status === false
+                  ? "var(--neg)"
+                  : "var(--dim)";
+              const dotTitle =
+                status === true
+                  ? t("VPN running")
+                  : status === false
+                  ? t("VPN started this session but exited")
+                  : t("VPN never started in this session");
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={"dlg-opt" + (selectedId === p.id ? " active" : "")}
+                  onClick={() => selectProfile(p.id)}
+                  style={{ justifyContent: "flex-start", textAlign: "left" }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", flex: 1, minWidth: 0 }}>
+                    {isVpn && (
+                      <span
+                        title={dotTitle}
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          backgroundColor: dotColor,
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
+                    <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 0 }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{p.name || p.id}</span>
+                      <span className="dlg-row-hint" style={{ fontSize: "var(--size-micro)" }}>
+                        {p.kind}
+                        {(p.kind === "socks5" || p.kind === "http") && ` ${p.host}:${p.port}`}
+                        {p.kind === "ssh_jump" && ` via ${p.viaConnection}`}
+                        {p.kind === "wireguard" && ` ${p.confPath || "default"}`}
+                        {p.kind === "external_vpn" && ` ${p.engine}`}
+                      </span>
+                    </span>
                   </span>
-                </span>
-              </button>
-            ))}
+                </button>
+              );
+            })}
             <button type="button" className="gb-btn" onClick={startNew} style={{ marginTop: "var(--sp-2)", justifyContent: "center" }}>
               <Plus size={12} />
               {t("New profile")}
@@ -452,43 +504,19 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
             {draft.kind === "wireguard" && (
               <>
                 <div className="dlg-row">
-                  <label className="dlg-row-label">{t("Endpoint")}</label>
+                  <label className="dlg-row-label">{t("Conf path")}</label>
                   <input
                     className="dlg-input mono"
-                    value={draft.wgEndpoint}
-                    onChange={(e) => setDraft({ ...draft, wgEndpoint: e.currentTarget.value })}
-                    placeholder="vpn.example.com:51820"
+                    value={draft.wgConfPath}
+                    onChange={(e) => setDraft({ ...draft, wgConfPath: e.currentTarget.value })}
+                    placeholder="/etc/wireguard/wg0.conf"
                   />
                 </div>
-                <div className="dlg-row">
-                  <label className="dlg-row-label">{t("Address (CIDR)")}</label>
-                  <input
-                    className="dlg-input mono"
-                    value={draft.wgAddress}
-                    onChange={(e) => setDraft({ ...draft, wgAddress: e.currentTarget.value })}
-                    placeholder="10.0.0.2/32"
-                  />
-                </div>
-                <div className="dlg-row">
-                  <label className="dlg-row-label">{t("AllowedIPs")}</label>
-                  <input
-                    className="dlg-input mono"
-                    value={draft.wgAllowedIps}
-                    onChange={(e) => setDraft({ ...draft, wgAllowedIps: e.currentTarget.value })}
-                    placeholder="10.0.0.0/24, 192.168.1.0/24"
-                  />
-                </div>
-                <div className="dlg-row">
-                  <label className="dlg-row-label">{t("Peer public key")}</label>
-                  <input
-                    className="dlg-input mono"
-                    value={draft.wgPeerKey}
-                    onChange={(e) => setDraft({ ...draft, wgPeerKey: e.currentTarget.value })}
-                    placeholder="base64-encoded public key"
-                  />
+                <div className="dlg-row-hint" style={{ marginLeft: 110 }}>
+                  {t("Path to a wg-quick compatible .conf file (Interface + Peer sections, including PrivateKey). Leave empty to use ~/.config/pier-x/egress/<id>.conf. Pier-X never reads or stores the private key — wg-quick does.")}
                 </div>
                 <div className="status-note status-note--warn">
-                  {t("WireGuard runs as a system VPN via wg-quick. Requires admin/root and writes a config file under ~/.config/pier-x/egress/<id>.conf. Click \"Start VPN\" below after Save.")}
+                  {t("WireGuard runs as a system VPN via wg-quick. Requires admin/root and the AllowedIPs in the conf will install routes on the host (may collide with your local LAN — narrow AllowedIPs to the subnets you actually need). Click \"Start VPN\" after Save.")}
                 </div>
               </>
             )}
@@ -643,6 +671,21 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
             )}
 
             {error && <div className="status-note status-note--error">{error}</div>}
+
+            {probe && (
+              <div
+                className={
+                  "status-note " + (probe.ok ? "status-note--ok" : "status-note--error")
+                }
+              >
+                {probe.ok
+                  ? t("✓ Reached %s in %dms").replace("%s", probe.target).replace("%d", String(probe.latencyMs ?? 0))
+                  : t("✗ %s failed (%dms): %s")
+                      .replace("%s", probe.target)
+                      .replace("%d", String(probe.latencyMs ?? 0))
+                      .replace("%s", probe.error)}
+              </div>
+            )}
           </div>
         </div>
         <div className="dlg-foot">
@@ -654,6 +697,16 @@ export default function EgressProfilesDialog({ open, onClose }: Props) {
           >
             <Trash2 size={12} />
             {t("Delete")}
+          </button>
+          <button
+            type="button"
+            className="gb-btn"
+            disabled={probing || busy}
+            onClick={() => void handleTest()}
+            title={t("Probe TCP reachability through the saved profile (target: 1.1.1.1:443, 5s timeout)")}
+          >
+            <Zap size={12} />
+            {probing ? t("Testing…") : t("Test")}
           </button>
           {(draft.kind === "wireguard" || draft.kind === "external_vpn") && (
             <>

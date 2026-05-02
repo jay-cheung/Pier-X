@@ -3851,6 +3851,101 @@ fn egress_vpn_stop(state: tauri::State<'_, AppState>, id: String) -> Result<(), 
     Ok(())
 }
 
+/// Result of a [`egress_profile_test`] probe. The frontend renders
+/// `latencyMs` next to a green check, or `error` next to a red ×.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EgressProbeResult {
+    /// True when the egress dial reached `target` within the
+    /// timeout. False means `error` is populated.
+    ok: bool,
+    /// Round-trip TCP-handshake latency through the egress, in
+    /// milliseconds. None on failure.
+    latency_ms: Option<u64>,
+    /// Error message on failure (empty on success).
+    error: String,
+    /// Echoed target so the UI can show "Reached 1.1.1.1:443 in 134ms".
+    target: String,
+}
+
+/// Probe an egress profile by dialing `target_host:target_port`
+/// through it. Default target is `1.1.1.1:443` — Cloudflare's
+/// always-on TLS endpoint, picked because it answers a TCP
+/// handshake from anywhere on the internet without requiring DNS.
+///
+/// Pass an explicit target to test reachability of the actual
+/// host you care about (the DB / SSH server you're about to
+/// connect to). Probe is hard-capped at 5 seconds.
+#[tauri::command]
+fn egress_profile_test(
+    id: Option<String>,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+) -> Result<EgressProbeResult, String> {
+    let target_host = target_host
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "1.1.1.1".to_string());
+    let target_port = target_port.unwrap_or(443);
+    let target = format!("{target_host}:{target_port}");
+
+    // Resolve the profile (None means a direct TCP probe — useful
+    // for verifying the host has any internet at all).
+    let profile = match id {
+        Some(id) if !id.trim().is_empty() => {
+            let store = ConnectionStore::load_default().map_err(|e| e.to_string())?;
+            Some(
+                store
+                    .egress_for(Some(&id))
+                    .cloned()
+                    .ok_or_else(|| format!("unknown egress profile: {id}"))?,
+            )
+        }
+        _ => None,
+    };
+
+    let ctx = SshJumpContext::new();
+    let outcome = pier_core::egress::probe_tcp_blocking(
+        profile.as_ref(),
+        &target_host,
+        target_port,
+        std::time::Duration::from_secs(5),
+        Some(&ctx as &dyn pier_core::egress::EgressContext),
+    );
+    let latency = outcome.elapsed.as_millis() as u64;
+    match outcome.result {
+        Ok(()) => Ok(EgressProbeResult {
+            ok: true,
+            latency_ms: Some(latency),
+            error: String::new(),
+            target,
+        }),
+        Err(e) => Ok(EgressProbeResult {
+            ok: false,
+            latency_ms: Some(latency),
+            error: e,
+            target,
+        }),
+    }
+}
+
+/// Snapshot of which VPN-backed profiles currently have a live
+/// subprocess. Returned as a flat map so the frontend can render
+/// status dots in one call instead of N round-trips.
+#[tauri::command]
+fn egress_vpn_status_all(
+    state: tauri::State<'_, AppState>,
+) -> Result<HashMap<String, bool>, String> {
+    let procs = state
+        .vpn_processes
+        .lock()
+        .map_err(|_| "vpn process state poisoned".to_string())?;
+    let mut out = HashMap::new();
+    for (id, p) in procs.iter() {
+        out.insert(id.clone(), p.is_running());
+    }
+    Ok(out)
+}
+
 /// Persist a username/password pair used by SOCKS5 / HTTP CONNECT
 /// egress profiles. The blob convention is `"user\npassword"`,
 /// matching what `pier_core::egress::resolve_auth` reads back.
@@ -3882,10 +3977,13 @@ fn egress_credential_ids(kind: &EgressKind) -> Vec<String> {
         EgressKind::Socks5 { auth, .. } | EgressKind::Http { auth, .. } => {
             auth.iter().map(|a| a.credential_id.clone()).collect()
         }
-        EgressKind::Wireguard { private_key, .. } => vec![private_key.credential_id.clone()],
-        EgressKind::None | EgressKind::SshJump { .. } | EgressKind::ExternalVpn { .. } => {
-            Vec::new()
-        }
+        // WireGuard's private key lives inside the wg-quick `.conf`
+        // file the user manages — Pier-X never sees it, so there's
+        // nothing to delete from the keyring on profile removal.
+        EgressKind::None
+        | EgressKind::SshJump { .. }
+        | EgressKind::Wireguard { .. }
+        | EgressKind::ExternalVpn { .. } => Vec::new(),
     }
 }
 
@@ -13842,6 +13940,8 @@ pub fn run() {
             egress_clear_credential,
             egress_vpn_start,
             egress_vpn_stop,
+            egress_vpn_status_all,
+            egress_profile_test,
             db_egress_endpoint,
             ssh_tunnel_open,
             ssh_tunnel_info,

@@ -89,23 +89,19 @@ impl VpnProcess {
 /// surface as `io::Error` so the caller can present them.
 fn plan_for(profile_id: &str, kind: &EgressKind) -> io::Result<Option<SpawnPlan>> {
     match kind {
-        EgressKind::Wireguard {
-            endpoint: _,
-            address: _,
-            allowed_ips: _,
-            private_key: _,
-            peer_public_key: _,
-        } => {
-            // The .conf file is expected to live under
-            // ~/.config/pier-x/egress/<profile-id>.conf — written
-            // by the UI when the user saves the profile. We pass
-            // the path to wg-quick which knows how to bring it up.
-            let conf = config_path_for(profile_id, "conf")?;
+        EgressKind::Wireguard { conf_path } => {
+            // Honour an explicit user path first; fall back to the
+            // app-managed slot only when the field is empty.
+            let conf: PathBuf = if conf_path.trim().is_empty() {
+                config_path_for(profile_id, "conf")?
+            } else {
+                PathBuf::from(conf_path.trim())
+            };
             if !conf.exists() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!(
-                        "wireguard profile config missing: {} — write the WG conf there before enabling the profile",
+                        "wireguard profile config missing: {} — point conf_path at an existing wg-quick .conf before enabling the profile",
                         conf.display()
                     ),
                 ));
@@ -244,15 +240,20 @@ mod tests {
     #[test]
     fn plan_for_wireguard_errors_when_conf_missing() {
         let kind = EgressKind::Wireguard {
-            endpoint: "vpn.example.com:51820".into(),
-            address: "10.0.0.2/32".into(),
-            allowed_ips: vec![],
-            private_key: super::super::EgressAuthRef {
-                credential_id: "ignored".into(),
-            },
-            peer_public_key: "AAAA".into(),
+            conf_path: String::new(),
         };
         let err = plan_for("definitely-not-a-real-profile-id", &kind).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn plan_for_wireguard_uses_explicit_conf_path() {
+        let kind = EgressKind::Wireguard {
+            conf_path: "/definitely/not/here/wg.conf".into(),
+        };
+        let err = plan_for("p", &kind).unwrap_err();
+        // The error message must reference the explicit path,
+        // proving we honoured it (and not the default slot).
+        assert!(err.to_string().contains("/definitely/not/here/wg.conf"));
     }
 }

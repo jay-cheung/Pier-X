@@ -2590,6 +2590,7 @@ button,
 .status-note { font-size: var(--size-small); color: var(--muted); }
 .status-note--error { color: var(--neg); }
 .status-note--warn { color: var(--warn); }
+.status-note--ok { color: var(--pos); }
 .inline-note { font-size: var(--size-small); color: var(--muted); }
 
 .inline-hint {

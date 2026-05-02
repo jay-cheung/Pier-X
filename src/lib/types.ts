@@ -291,11 +291,9 @@ export type EgressKind =
   | { kind: "ssh_jump"; viaConnection: string }
   | {
       kind: "wireguard";
-      endpoint: string;
-      address: string;
-      allowedIps: string[];
-      privateKey: EgressAuthRef;
-      peerPublicKey: string;
+      /** Absolute path to a wg-quick `.conf` file. Empty string falls
+       *  back to the app-managed slot under `~/.config/pier-x/egress/<id>.conf`. */
+      confPath: string;
     }
   | { kind: "external_vpn"; engine: ExternalVpnEngine; config: string };
 

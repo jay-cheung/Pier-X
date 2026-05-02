@@ -9,6 +9,9 @@ type EgressStore = {
   profiles: EgressProfile[];
   loading: boolean;
   error: string;
+  /** id → true (running) / false (started this session, now dead).
+   *  Profiles missing from this map were never started. */
+  vpnStatus: Record<string, boolean>;
   refresh: () => Promise<void>;
   save: (profile: EgressProfile) => Promise<void>;
   remove: (id: string) => Promise<void>;
@@ -16,6 +19,9 @@ type EgressStore = {
   clearCredential: (credentialId: string) => Promise<void>;
   vpnStart: (id: string) => Promise<void>;
   vpnStop: (id: string) => Promise<void>;
+  /** Re-pull `egress_vpn_status_all`. Cheap; safe to call after
+   *  vpnStart / vpnStop and on dialog open. */
+  refreshVpnStatus: () => Promise<void>;
 };
 
 function localize(error: unknown) {
@@ -27,6 +33,7 @@ export const useEgressStore = create<EgressStore>((set, get) => ({
   profiles: [],
   loading: false,
   error: "",
+  vpnStatus: {},
 
   refresh: async () => {
     set({ loading: true, error: "" });
@@ -84,8 +91,12 @@ export const useEgressStore = create<EgressStore>((set, get) => ({
     try {
       await cmd.egressVpnStart(id);
       set({ error: "" });
+      await get().refreshVpnStatus();
     } catch (e) {
       set({ error: localize(e) });
+      // Status may have changed even on error (e.g. process died
+      // mid-spawn) — refresh anyway so the UI doesn't lie.
+      await get().refreshVpnStatus().catch(() => undefined);
       throw e;
     }
   },
@@ -94,9 +105,19 @@ export const useEgressStore = create<EgressStore>((set, get) => ({
     try {
       await cmd.egressVpnStop(id);
       set({ error: "" });
+      await get().refreshVpnStatus();
     } catch (e) {
       set({ error: localize(e) });
       throw e;
+    }
+  },
+
+  refreshVpnStatus: async () => {
+    try {
+      const status = await cmd.egressVpnStatusAll();
+      set({ vpnStatus: status });
+    } catch (e) {
+      set({ error: localize(e) });
     }
   },
 }));

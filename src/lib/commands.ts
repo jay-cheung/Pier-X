@@ -563,6 +563,39 @@ export const egressVpnStart = (id: string) =>
 export const egressVpnStop = (id: string) =>
   invoke<void>("egress_vpn_stop", { id });
 
+/** Map from profile id to running flag. Profiles without a tracked
+ *  process (SOCKS / HTTP / SshJump / Direct, plus VPN profiles that
+ *  were never started in this session) are simply absent. */
+export const egressVpnStatusAll = () =>
+  invoke<Record<string, boolean>>("egress_vpn_status_all");
+
+/** Result of a `Test connection` probe. `latencyMs` is populated
+ *  on both success and failure (helps tell instant refusal apart
+ *  from slow timeout). */
+export type EgressProbeResult = {
+  ok: boolean;
+  latencyMs: number | null;
+  error: string;
+  /** Echoed `host:port` so the UI can show "Reached 1.1.1.1:443". */
+  target: string;
+};
+
+/** Probe an egress profile by dialing `target` (defaults to
+ *  `1.1.1.1:443` — Cloudflare's always-on TLS endpoint, picked
+ *  because it answers a TCP handshake from anywhere on the
+ *  internet without requiring DNS). Pass `id = null` to probe
+ *  direct (no profile). */
+export const egressProfileTest = (
+  id: string | null,
+  targetHost?: string,
+  targetPort?: number,
+) =>
+  invoke<EgressProbeResult>("egress_profile_test", {
+    id: id || null,
+    targetHost: targetHost || null,
+    targetPort: targetPort ?? null,
+  });
+
 /**
  * Resolve the stored password for a saved SSH connection from the OS
  * keychain. Returns an empty string for non-password auth. Use this to

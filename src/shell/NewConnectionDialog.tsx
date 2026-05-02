@@ -324,11 +324,15 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                   onChange={(e) => setEgressId(e.currentTarget.value)}
                 >
                   <option value="">{t("Direct (no tunnel)")}</option>
-                  {egressProfiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name || p.id}
-                    </option>
-                  ))}
+                  {egressProfiles.map((p) => {
+                    const isSystemVpn = p.kind === "wireguard" || p.kind === "external_vpn";
+                    const prefix = isSystemVpn ? "⚠ " : "";
+                    return (
+                      <option key={p.id} value={p.id}>
+                        {prefix}{p.name || p.id}
+                      </option>
+                    );
+                  })}
                   {egressId && !egressProfiles.some((p) => p.id === egressId) && (
                     <option value={egressId}>{t("(missing)")}: {egressId}</option>
                   )}
@@ -344,6 +348,34 @@ export default function NewConnectionDialog({ open, onClose, onConnect, onConnec
                 </button>
               </div>
             </div>
+            {(() => {
+              const selected = egressProfiles.find((p) => p.id === egressId);
+              if (!selected) return null;
+              const isSystemVpn =
+                selected.kind === "wireguard" || selected.kind === "external_vpn";
+              if (isSystemVpn) {
+                return (
+                  <div className="dlg-row-hint" style={{ marginLeft: 110, color: "var(--warn)" }}>
+                    {t("⚠ System-level VPN. wg-quick / openvpn installs OS routes when started; if its AllowedIPs / pushed routes overlap your local LAN subnet you will lose access to those LAN hosts. Narrow AllowedIPs in the conf to just the subnets you need.")}
+                  </div>
+                );
+              }
+              if (selected.kind === "ssh_jump") {
+                return (
+                  <div className="dlg-row-hint" style={{ marginLeft: 110 }}>
+                    {t("Per-connection: this SSH session tunnels through the saved \"%s\" jump host (multi-hop allowed, depth ≤ 8).").replace("%s", selected.viaConnection)}
+                  </div>
+                );
+              }
+              if (selected.kind === "socks5" || selected.kind === "http") {
+                return (
+                  <div className="dlg-row-hint" style={{ marginLeft: 110 }}>
+                    {t("Per-connection: only this SSH session goes through the proxy. Host routing untouched.")}
+                  </div>
+                );
+              }
+              return null;
+            })()}
             <div className="dlg-row">
               <label className="dlg-row-label">{t("Host")}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 88px", gap: "var(--sp-2)" }}>
