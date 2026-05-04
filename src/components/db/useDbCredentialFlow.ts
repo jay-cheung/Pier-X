@@ -272,6 +272,26 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   }, [hasSsh, tab.id, tabTunnelId, tabTunnelPort, tunnelSlot, updateTab]);
 
   async function ensureConnectionTarget(forceRebuild = false) {
+    // Credential-level egress wins over the parent SSH tunnel: when a
+    // saved credential carries an `egressId`, the backend lazily spins
+    // up a forwarder bound to 127.0.0.1 and we connect to that loopback
+    // address. The parent SSH tab's tunnel slot is irrelevant in that
+    // case — the egress profile (SOCKS5 / wg / ssh-jump / …) handles
+    // routing on its own.
+    const activeCredId = adapter.readActiveCredId(tab);
+    if (savedIndex !== null && activeCredId) {
+      try {
+        const ep = await cmd.dbEgressEndpoint(savedIndex, activeCredId);
+        if (ep.viaForwarder) {
+          setTunnelError("");
+          return { host: ep.host, port: ep.port };
+        }
+      } catch {
+        // Stale cred id (just deleted, etc.) — fall through to the
+        // SSH-tunnel / direct path so the panel can surface a sensible
+        // error instead of dead-ending here.
+      }
+    }
     if (!hasSsh) {
       return { host: tabHost.trim(), port: tabPort };
     }

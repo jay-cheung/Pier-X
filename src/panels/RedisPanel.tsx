@@ -309,6 +309,20 @@ function RedisPanelBody({ tab }: Props) {
 
   // ── Actions ───────────────────────────────────────────────
   async function ensureConnectionTarget(forceTunnel = false) {
+    // Mirrors useDbCredentialFlow.ensureConnectionTarget: a credential
+    // with its own egress profile bypasses the parent SSH tunnel and
+    // connects through the loopback forwarder the backend started for it.
+    if (savedIndex !== null && tab.redisActiveCredentialId) {
+      try {
+        const ep = await cmd.dbEgressEndpoint(savedIndex, tab.redisActiveCredentialId);
+        if (ep.viaForwarder) {
+          setTunnelError("");
+          return { host: ep.host, port: ep.port };
+        }
+      } catch {
+        /* fall through to legacy path */
+      }
+    }
     if (!hasSsh) return { host: host.trim(), port: p };
     const info = await ensureTunnelSlot({
       tab,
