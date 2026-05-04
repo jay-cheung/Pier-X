@@ -5,6 +5,7 @@ import {
   GitBranch,
   Globe,
   Package,
+  Search,
   Shield,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
@@ -74,6 +75,7 @@ export const RIGHT_TOOL_ORDER: RightTool[] = [
   "firewall",
   "sftp",
   "log",
+  "search",
   "docker",
   "mysql",
   "postgres",
@@ -148,6 +150,15 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     tintVar: "var(--svc-log)",
     splashTitle: "Log Viewer",
     splashSubtitle: "Stream journal, nginx, or custom log tails from a saved server.",
+  },
+  search: {
+    label: "Code Search",
+    category: "files",
+    icon: Search,
+    remoteOnly: true,
+    tintVar: "var(--svc-search)",
+    splashTitle: "Code Search",
+    splashSubtitle: "Run ripgrep / git grep across the terminal's working directory and jump straight to the file.",
   },
   docker: {
     label: "Docker",

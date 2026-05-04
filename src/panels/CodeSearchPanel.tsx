@@ -1,0 +1,384 @@
+// Code Search panel (M8).
+//
+// Runs `rg` (preferred) or `git grep` (fallback) over the active
+// SSH session at the terminal's last cwd, and renders matches as
+// a flat file-grouped list. Clicking a hit opens the SFTP file
+// editor at that path; the editor's built-in CodeMirror search +
+// "Go to line" carry the user the rest of the way.
+
+import {
+  Folder,
+  Loader2,
+  Search,
+  X,
+  Regex,
+  CaseSensitive,
+  WholeWord,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import * as cmd from "../lib/commands";
+import type { CodeSearchHit, CodeSearchOutput } from "../lib/commands";
+import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
+import type { TabState } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
+import { useI18n } from "../i18n/useI18n";
+import { localizeError } from "../i18n/localizeMessage";
+import PanelHeader from "../components/PanelHeader";
+import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
+import SftpEditorDialog from "../components/SftpEditorDialog";
+
+const SEARCH_ICON = RIGHT_TOOL_META.search.icon;
+
+type Props = { tab: TabState };
+
+export default function CodeSearchPanel(props: Props) {
+  const ready = useDeferredMount();
+  return (
+    <div className="panel-stage">
+      {ready ? <CodeSearchBody {...props} /> : <PanelSkeleton variant="rows" rows={8} />}
+    </div>
+  );
+}
+
+type GroupedFile = {
+  file: string;
+  hits: CodeSearchHit[];
+};
+
+function groupHitsByFile(hits: CodeSearchHit[]): GroupedFile[] {
+  const out: GroupedFile[] = [];
+  const idxByFile = new Map<string, number>();
+  for (const h of hits) {
+    const key = h.file;
+    const idx = idxByFile.get(key);
+    if (idx === undefined) {
+      idxByFile.set(key, out.length);
+      out.push({ file: key, hits: [h] });
+    } else {
+      out[idx].hits.push(h);
+    }
+  }
+  return out;
+}
+
+function joinPath(root: string, rel: string): string {
+  if (!rel) return root;
+  if (rel.startsWith("/")) return rel;
+  if (!root) return rel;
+  return root.endsWith("/") ? `${root}${rel}` : `${root}/${rel}`;
+}
+
+function basename(path: string): string {
+  if (!path) return "";
+  const i = path.lastIndexOf("/");
+  return i < 0 ? path : path.slice(i + 1);
+}
+
+function CodeSearchBody({ tab }: Props) {
+  const { t } = useI18n();
+  const formatError = (e: unknown) => localizeError(e, t);
+
+  const sshTarget = effectiveSshTarget(tab);
+  const ready = isSshTargetReady(sshTarget);
+
+  // Default cwd: the persisted `lastCwd` from the terminal panel.
+  // Empty falls through to the backend's `$HOME` resolver.
+  const [cwd, setCwd] = useState<string>(tab.lastCwd ?? "");
+  useEffect(() => {
+    // Re-seed when the tab's cwd changes externally — but only when
+    // the user hasn't typed an override yet (empty / matches the
+    // previous value).
+    setCwd((cur) =>
+      cur === "" || cur === (tab.lastCwd ?? "") ? tab.lastCwd ?? "" : cur,
+    );
+  }, [tab.lastCwd]);
+
+  const [query, setQuery] = useState("");
+  const [caseInsensitive, setCaseInsensitive] = useState(true);
+  const [regex, setRegex] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<CodeSearchOutput | null>(null);
+
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Editor target: opens the SftpEditorDialog at a hit's file. Path
+  // is absolute (we resolve `cwd + relative`); the dialog reads the
+  // bytes via SFTP and renders in CodeMirror.
+  const [editorTarget, setEditorTarget] = useState<{
+    path: string;
+    name: string;
+  } | null>(null);
+
+  const grouped = useMemo(
+    () => (result ? groupHitsByFile(result.hits) : []),
+    [result],
+  );
+
+  const sshArgs = {
+    host: sshTarget?.host ?? "",
+    port: sshTarget?.port ?? 22,
+    user: sshTarget?.user ?? "",
+    authMode: sshTarget?.authMode ?? "password",
+    password: sshTarget?.password ?? "",
+    keyPath: sshTarget?.keyPath ?? "",
+    savedConnectionIndex: sshTarget?.savedConnectionIndex ?? null,
+  };
+
+  async function runSearch() {
+    if (!ready || !sshTarget) {
+      setError(t("SSH connection required."));
+      return;
+    }
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setError(t("Type a query first."));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const out = await cmd.codeSearch({
+        ...sshArgs,
+        cwd: cwd.trim(),
+        query: trimmed,
+        caseInsensitive,
+        regex,
+        wholeWord,
+        maxHits: 500,
+      });
+      setResult(out);
+      // Surface engine state failures as errors, not empty results.
+      if (out.engine === "none") {
+        setError(
+          t(
+            "No search engine on this host — install ripgrep (Software panel) or run inside a git repo.",
+          ),
+        );
+      } else if (out.engine === "cwd-missing") {
+        setError(
+          t("Working directory does not exist on the remote: {cwd}", {
+            cwd: cwd || "$HOME",
+          }),
+        );
+      } else if (
+        out.exitCode !== 0 &&
+        out.exitCode !== 1 &&
+        out.hits.length === 0
+      ) {
+        setError(
+          t("Search engine exited with code {code}.", { code: out.exitCode }),
+        );
+      }
+    } catch (e) {
+      setResult(null);
+      setError(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openHit(hit: CodeSearchHit) {
+    if (!cwd && !hit.file.startsWith("/")) {
+      setError(
+        t(
+          "Cannot resolve absolute path for this hit — open the file via SFTP first.",
+        ),
+      );
+      return;
+    }
+    const absolute = joinPath(cwd, hit.file);
+    setEditorTarget({ path: absolute, name: basename(hit.file) });
+  }
+
+  const engineLabel =
+    result?.engine === "rg"
+      ? "rg"
+      : result?.engine === "git-grep"
+        ? "git grep"
+        : null;
+
+  const headerMeta = result
+    ? t("{n} hits", { n: result.hits.length }) +
+      (result.truncated ? " · " + t("truncated") : "")
+    : undefined;
+
+  return (
+    <>
+      <PanelHeader
+        icon={SEARCH_ICON}
+        title={t("Code Search")}
+        meta={headerMeta}
+      />
+      <div className="cs">
+        <div className="cs-toolbar">
+          <div className="cs-input-wrap">
+            <Search size={12} className="cs-input-icon" aria-hidden="true" />
+            <input
+              ref={inputRef}
+              type="text"
+              className="dlg-input mono cs-input"
+              spellCheck={false}
+              placeholder={t("Search the terminal's working directory…")}
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void runSearch();
+                }
+              }}
+              disabled={busy}
+            />
+            {query ? (
+              <button
+                type="button"
+                className="cs-input-clear"
+                onClick={() => setQuery("")}
+                aria-label={t("Clear")}
+              >
+                <X size={11} />
+              </button>
+            ) : null}
+          </div>
+          <div className="cs-toggles">
+            <button
+              type="button"
+              className={"cs-toggle" + (caseInsensitive ? "" : " on")}
+              onClick={() => setCaseInsensitive((v) => !v)}
+              title={t("Case sensitive")}
+              disabled={busy}
+            >
+              <CaseSensitive size={12} />
+            </button>
+            <button
+              type="button"
+              className={"cs-toggle" + (wholeWord ? " on" : "")}
+              onClick={() => setWholeWord((v) => !v)}
+              title={t("Whole word")}
+              disabled={busy}
+            >
+              <WholeWord size={12} />
+            </button>
+            <button
+              type="button"
+              className={"cs-toggle" + (regex ? " on" : "")}
+              onClick={() => setRegex((v) => !v)}
+              title={t("Regex")}
+              disabled={busy}
+            >
+              <Regex size={12} />
+            </button>
+          </div>
+          <button
+            type="button"
+            className="btn is-primary is-compact"
+            onClick={() => void runSearch()}
+            disabled={busy || !ready || !query.trim()}
+          >
+            {busy ? <Loader2 size={11} className="cs-spin" /> : <Search size={11} />}
+            {busy ? t("Searching…") : t("Search")}
+          </button>
+        </div>
+
+        <div className="cs-cwd-row">
+          <Folder size={11} className="muted" aria-hidden="true" />
+          <input
+            type="text"
+            className="dlg-input mono cs-cwd-input"
+            spellCheck={false}
+            placeholder="$HOME"
+            value={cwd}
+            onChange={(e) => setCwd(e.currentTarget.value)}
+            disabled={busy}
+            aria-label={t("Working directory")}
+          />
+          {engineLabel ? (
+            <span className="cs-engine-badge mono" title={t("Search engine")}>
+              {engineLabel}
+            </span>
+          ) : null}
+        </div>
+
+        {error ? (
+          <div className="status-note status-note--error mono cs-error">
+            {error}
+          </div>
+        ) : null}
+
+        {!ready ? (
+          <div className="empty-note">{t("SSH connection required.")}</div>
+        ) : !result && !busy ? (
+          <div className="empty-note">
+            {t(
+              "Type a query and press Enter to search the terminal's current directory.",
+            )}
+          </div>
+        ) : busy ? (
+          <div className="empty-note cs-busy">
+            <Loader2 size={14} className="cs-spin" /> {t("Searching…")}
+          </div>
+        ) : result && result.hits.length === 0 && !error ? (
+          <div className="empty-note">{t("No matches.")}</div>
+        ) : null}
+
+        {result && result.hits.length > 0 ? (
+          <div className="cs-results">
+            {grouped.map((group) => (
+              <div key={group.file} className="cs-file">
+                <div className="cs-file-head mono" title={group.file}>
+                  <span className="cs-file-path">{group.file}</span>
+                  <span className="cs-file-count muted">
+                    {group.hits.length}
+                  </span>
+                </div>
+                <div className="cs-file-hits">
+                  {group.hits.map((hit, i) => (
+                    <button
+                      key={`${group.file}:${hit.line}:${hit.column}:${i}`}
+                      type="button"
+                      className="cs-hit mono"
+                      onClick={() => openHit(hit)}
+                      title={t("Open in SFTP editor")}
+                    >
+                      <span className="cs-hit-loc muted">
+                        {hit.line}
+                        {hit.column ? `:${hit.column}` : ""}
+                      </span>
+                      <span className="cs-hit-text">{hit.text}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {result.truncated ? (
+              <div className="status-note status-note--warn mono cs-truncated">
+                {t(
+                  "Results truncated at {n} hits — refine your query or scope.",
+                  { n: result.hits.length },
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {editorTarget && (
+        <SftpEditorDialog
+          open
+          path={editorTarget.path}
+          name={editorTarget.name}
+          sshArgs={sshArgs}
+          ownerLabel={sshArgs.user}
+          onClose={() => setEditorTarget(null)}
+        />
+      )}
+    </>
+  );
+}

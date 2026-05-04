@@ -721,6 +721,55 @@ export type HostKeyPromptEvent = {
 export const sshHostKeyDecide = (promptId: string, accept: boolean) =>
   invoke<void>("ssh_host_key_decide", { promptId, accept });
 
+export type CodeSearchEngine = "rg" | "git-grep" | "none" | "cwd-missing";
+
+export type CodeSearchHit = {
+  file: string;
+  line: number;
+  column: number;
+  text: string;
+};
+
+export type CodeSearchOutput = {
+  engine: CodeSearchEngine;
+  hits: CodeSearchHit[];
+  truncated: boolean;
+  exitCode: number;
+};
+
+export type CodeSearchParams = {
+  host: string;
+  port: number;
+  user: string;
+  authMode: string;
+  password: string;
+  keyPath: string;
+  savedConnectionIndex: number | null;
+  cwd: string;
+  query: string;
+  caseInsensitive?: boolean;
+  regex?: boolean;
+  wholeWord?: boolean;
+  maxHits?: number;
+};
+
+export const codeSearch = (params: CodeSearchParams) =>
+  invoke<CodeSearchOutput>("code_search", {
+    host: params.host,
+    port: params.port,
+    user: params.user,
+    authMode: params.authMode,
+    password: params.password,
+    keyPath: params.keyPath,
+    savedConnectionIndex: params.savedConnectionIndex,
+    cwd: params.cwd,
+    query: params.query,
+    caseInsensitive: params.caseInsensitive ?? false,
+    regex: params.regex ?? false,
+    wholeWord: params.wholeWord ?? false,
+    maxHits: params.maxHits ?? 500,
+  });
+
 /**
  * Background pre-warm of the shared SSH session cache for a target.
  *

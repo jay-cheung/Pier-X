@@ -36,6 +36,7 @@
 
 pub mod apache;
 pub mod caddy;
+pub mod code_search;
 pub mod compose_k8s;
 pub mod docker;
 pub mod firewall;

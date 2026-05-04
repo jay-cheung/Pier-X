@@ -88,6 +88,7 @@
   --svc-firewall: #daa45f;
   --svc-webserver: #2bbd76;
   --svc-software: #c49eff;
+  --svc-search: #f0c969;
 
   /* ── Legacy aliases (Phase A/B/C compat) ─────────────────── */
   --bg-canvas: var(--bg);

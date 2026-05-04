@@ -4193,6 +4193,58 @@ fn host_key_verifier() -> HostKeyVerifier {
     }
 }
 
+/// Run `rg` (preferred) or `git grep` (fallback) in the active
+/// SSH session's working directory. The exec runs through the
+/// cached SSH session so the panel doesn't pay a fresh handshake
+/// per query; `run_with_session_retry` evicts + retries once
+/// when the cached session went stale.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn code_search(
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    cwd: String,
+    query: String,
+    case_insensitive: Option<bool>,
+    regex: Option<bool>,
+    whole_word: Option<bool>,
+    max_hits: Option<usize>,
+) -> Result<pier_core::services::code_search::SearchOutput, String> {
+    let trimmed_query = query.trim();
+    if trimmed_query.is_empty() {
+        return Err(String::from("Query is empty."));
+    }
+    let opts = pier_core::services::code_search::SearchOpts {
+        cwd,
+        query: trimmed_query.to_string(),
+        case_insensitive: case_insensitive.unwrap_or(false),
+        regex: regex.unwrap_or(false),
+        whole_word: whole_word.unwrap_or(false),
+        max_hits: max_hits.unwrap_or(500),
+    };
+
+    run_with_session_retry(
+        &state,
+        &host,
+        port,
+        &user,
+        &auth_mode,
+        &password,
+        &key_path,
+        saved_connection_index,
+        |session| {
+            pier_core::services::code_search::search_blocking(session, opts.clone())
+                .map_err(|e| e.to_string())
+        },
+    )
+}
+
 #[tauri::command]
 fn ssh_host_key_decide(prompt_id: String, accept: bool) -> Result<(), String> {
     let state = HOST_KEY_PROMPT
@@ -14054,6 +14106,7 @@ pub fn run() {
             ssh_known_hosts_list,
             ssh_known_hosts_remove,
             ssh_host_key_decide,
+            code_search,
             ssh_session_prewarm,
             terminal_create,
             terminal_create_ssh,

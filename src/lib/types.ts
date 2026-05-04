@@ -1052,6 +1052,7 @@ export type RightTool =
   | "redis"
   | "log"
   | "sftp"
+  | "search"
   | "sqlite"
   | "postgres"
   | "markdown"
@@ -1224,6 +1225,7 @@ export const REMOTE_ONLY_TOOLS: ReadonlySet<RightTool> = new Set<RightTool>([
   "firewall",
   "sftp",
   "log",
+  "search",
   "docker",
   "mysql",
   "postgres",

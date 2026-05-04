@@ -17,6 +17,7 @@ import SftpPanel from "../panels/SftpPanel";
 import ServerMonitorPanel from "../panels/ServerMonitorPanel";
 import MarkdownPanel from "../panels/MarkdownPanel";
 import LogViewerPanel from "../panels/LogViewerPanel";
+import CodeSearchPanel from "../panels/CodeSearchPanel";
 import FirewallPanel from "../panels/FirewallPanel";
 import WebServerPanel from "../panels/WebServerPanel";
 import SoftwarePanel from "../panels/SoftwarePanel";
@@ -41,7 +42,7 @@ type Props = {
   onToggleCollapsed: () => void;
 };
 
-type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "sftp" | "firewall" | "webserver" | "software";
+type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "search" | "sftp" | "firewall" | "webserver" | "software";
 
 function renderSplash(
   kind: SplashTool,
@@ -112,6 +113,8 @@ function ToolContent({
       return tab ? <LogViewerPanel key={tab.id} tab={tab} /> : renderSplash("log", t, onConnectSaved, onNewConnection);
     case "sftp":
       return tab ? <SftpPanel key={tab.id} tab={tab} /> : renderSplash("sftp", t, onConnectSaved, onNewConnection);
+    case "search":
+      return tab ? <CodeSearchPanel key={tab.id} tab={tab} /> : renderSplash("search", t, onConnectSaved, onNewConnection);
     case "sqlite":
       return <SqlitePanel key={tabKey} tab={tab} />;
     case "webserver":
