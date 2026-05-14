@@ -2863,7 +2863,13 @@ fn parse_user_extras_bytes(
 fn load_user_extras(
     path: &std::path::Path,
 ) -> std::result::Result<UserExtras, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UserExtras::default());
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     let wrapper = parse_user_extras_bytes(&bytes)?;
     let mut packages: Vec<PackageDescriptor> = Vec::with_capacity(wrapper.packages.len());
     for raw in wrapper.packages {
