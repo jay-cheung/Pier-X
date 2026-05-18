@@ -6581,7 +6581,36 @@ fn is_safe_shell_username(user: &str) -> bool {
 }
 
 #[tauri::command]
-fn sftp_browse(
+async fn sftp_browse(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: Option<String>,
+    saved_connection_index: Option<usize>,
+) -> Result<SftpBrowseState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_browse_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            saved_connection_index,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_browse join: {error}"))?
+}
+
+fn sftp_browse_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
