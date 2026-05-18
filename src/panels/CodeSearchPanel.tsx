@@ -16,7 +16,7 @@ import {
   CaseSensitive,
   WholeWord,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import * as cmd from "../lib/commands";
 import type { CodeSearchHit, CodeSearchOutput } from "../lib/commands";
@@ -27,10 +27,10 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
-import SftpEditorDialog from "../components/SftpEditorDialog";
 import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
 
 const SEARCH_ICON = RIGHT_TOOL_META.search.icon;
+const SftpEditorDialog = lazy(() => import("../components/SftpEditorDialog"));
 
 type Props = { tab: TabState };
 
@@ -426,16 +426,18 @@ function CodeSearchBody({ tab }: Props) {
       </div>
 
       {editorTarget && (
-        <SftpEditorDialog
-          open
-          path={editorTarget.path}
-          name={editorTarget.name}
-          initialLine={editorTarget.line}
-          initialColumn={editorTarget.column}
-          sshArgs={sshArgs}
-          ownerLabel={effectiveShellUser(tab, sshTarget) || sshArgs.user}
-          onClose={() => setEditorTarget(null)}
-        />
+        <Suspense fallback={null}>
+          <SftpEditorDialog
+            open
+            path={editorTarget.path}
+            name={editorTarget.name}
+            initialLine={editorTarget.line}
+            initialColumn={editorTarget.column}
+            sshArgs={sshArgs}
+            ownerLabel={effectiveShellUser(tab, sshTarget) || sshArgs.user}
+            onClose={() => setEditorTarget(null)}
+          />
+        </Suspense>
       )}
     </>
   );

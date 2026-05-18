@@ -3,7 +3,7 @@
 // interval), keyboard I/O, scrollback, and session lifecycle management.
 
 import { KeyRound, SquareTerminal } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
@@ -130,7 +130,7 @@ function inferPromptUser(snapshot: TerminalSnapshot): string {
   return match?.[1] ?? "";
 }
 
-export default function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
+function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const { t, locale } = useI18n();
   const formatError = (error: unknown) => localizeError(error, t);
   const updateTab = useTabStore((s) => s.updateTab);
@@ -379,6 +379,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // not retrigger the prewarm.
   const prewarmFingerprintRef = useRef<string>("");
   useEffect(() => {
+    if (!isActive) return;
     const target = effectiveSshTarget(tab);
     if (!target) {
       prewarmFingerprintRef.current = "";
@@ -448,6 +449,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     tab.sshKeyPath,
     tab.sshSavedConnectionIndex,
     (tab.sshPassword?.length ?? 0) > 0,
+    isActive,
   ]);
 
   // ── Measure terminal grid dimensions ────────────────────────
@@ -505,6 +507,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   useEffect(() => {
     if (session) return;
+    if (!isActive) return;
     let cancelled = false;
 
     async function create() {
@@ -577,7 +580,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     // via the recovery dialog (App.tsx propagates the new password
     // into matching tabs and nulls `terminalSessionId`, which we
     // mirror into local `session` state below).
-  }, [session, tab.backend, tab.sshHost, tab.sshPassword]);
+  }, [session, isActive, tab.backend, tab.sshHost, tab.sshPassword]);
 
   // When App.tsx clears `tab.terminalSessionId` (e.g. as part of
   // the post-recovery propagation), drop the local session state
@@ -728,6 +731,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
   // ship it to the clipboard. Only active when the setting is on so
   // existing users keep the explicit ⌘C behavior.
   useEffect(() => {
+    if (!isActive) return;
     if (!copyOnSelect) return;
     const viewport = viewportRef.current;
     if (!viewport) return;
@@ -744,12 +748,13 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
     };
     viewport.addEventListener("mouseup", handler);
     return () => viewport.removeEventListener("mouseup", handler);
-  }, [copyOnSelect, session]);
+  }, [copyOnSelect, session, isActive]);
 
   useEffect(() => {
+    if (!isActive) return;
     setStatusTerminalSize(terminalSize.cols, terminalSize.rows);
     return () => setStatusTerminalSize(null, null);
-  }, [terminalSize.cols, terminalSize.rows, setStatusTerminalSize]);
+  }, [isActive, terminalSize.cols, terminalSize.rows, setStatusTerminalSize]);
 
   // ── Apply scrollback settings ───────────────────────────────
 
@@ -808,6 +813,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
 
   useEffect(() => {
     if (!session) return;
+    if (!isActive) return;
     let disposed = false;
     let inflight = false;
     let dirty = false;
@@ -1017,7 +1023,7 @@ export default function TerminalPanel({ tab, isActive, onEditConnection }: Props
       safeUnlisten(unlistenSshPrompt);
       safeUnlisten(unlistenSshPassphrasePrompt);
     };
-  }, [session, scrollbackOffset]);
+  }, [session, isActive, scrollbackOffset]);
 
   // ── Cleanup on unmount ──────────────────────────────────────
 
@@ -2815,3 +2821,5 @@ function TerminalSnippetsDialog({
     </div>
   );
 }
+
+export default memo(TerminalPanel);

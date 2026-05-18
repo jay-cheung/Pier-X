@@ -1,7 +1,7 @@
 // ── Pier-X Shell Orchestrator ────────────────────────────────────
 // Three-pane IDE layout: Sidebar | Center (TabBar + Content) | RightSidebar
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -43,16 +43,14 @@ const RIGHT_TOOL_KEY_MAP: RightTool[] = [
 import type { CoreInfo, FileEntry, RightTool, SavedSshConnection } from "./lib/types";
 import { isToolReachable, resolveReachableTool } from "./lib/types";
 import PortForwardDialog from "./components/PortForwardDialog";
+import PanelSkeleton from "./components/PanelSkeleton";
 import ResizeHandle from "./components/ResizeHandle";
-import SettingsDialog from "./components/SettingsDialog";
 import Stage from "./components/Stage";
 import TaskTray from "./components/TaskTray";
 import ToastStack from "./components/ToastStack";
 import { withTask } from "./stores/useTaskStore";
 import type { MenuDef } from "./components/TitlebarMenu";
-import TerminalPanel from "./panels/TerminalPanel";
-import HostsHealthPanel from "./panels/HostsHealthPanel";
-import CommandPalette, { type PaletteCommand } from "./shell/CommandPalette";
+import type { PaletteCommand } from "./shell/CommandPalette";
 import HostKeyPromptDialog from "./shell/HostKeyPromptDialog";
 import NewConnectionDialog from "./shell/NewConnectionDialog";
 import TopBar from "./shell/TopBar";
@@ -81,6 +79,11 @@ import "./styles/atoms.css";
 import "./styles/shell.css";
 import "./styles/pier-x.css";
 import "./styles/db-panel.css";
+
+const TerminalPanel = lazy(() => import("./panels/TerminalPanel"));
+const HostsHealthPanel = lazy(() => import("./panels/HostsHealthPanel"));
+const CommandPalette = lazy(() => import("./shell/CommandPalette"));
+const SettingsDialog = lazy(() => import("./components/SettingsDialog"));
 
 const MARKDOWN_EXTENSIONS = /\.(md|markdown|mdown|mkdn|mkd|mdx)$/i;
 const PANE_STORAGE_KEY = "pierx:pane-widths";
@@ -962,25 +965,27 @@ function App() {
                 workspaceRoot={coreInfo?.workspaceRoot}
               />
             ) : (
-              tabs.map((tab) =>
-                tab.backend === "hosts-health" ? (
-                  <HostsHealthPanel
-                    key={tab.id}
-                    tab={tab}
-                    isActive={tab.id === activeTabId}
-                    onConnectSaved={openSshSaved}
-                    onEditConnection={openEditConnectionDialog}
-                    onNewConnection={openNewConnectionDialog}
-                  />
-                ) : (
-                  <TerminalPanel
-                    key={tab.id}
-                    tab={tab}
-                    isActive={tab.id === activeTabId}
-                    onEditConnection={openEditConnectionDialog}
-                  />
-                ),
-              )
+              <Suspense fallback={<PanelSkeleton variant="chrome" rows={6} />}>
+                {tabs.map((tab) =>
+                  tab.backend === "hosts-health" ? (
+                    <HostsHealthPanel
+                      key={tab.id}
+                      tab={tab}
+                      isActive={tab.id === activeTabId}
+                      onConnectSaved={openSshSaved}
+                      onEditConnection={openEditConnectionDialog}
+                      onNewConnection={openNewConnectionDialog}
+                    />
+                  ) : (
+                    <TerminalPanel
+                      key={tab.id}
+                      tab={tab}
+                      isActive={tab.id === activeTabId}
+                      onEditConnection={openEditConnectionDialog}
+                    />
+                  ),
+                )}
+              </Suspense>
             )}
           </div>
 
@@ -1024,11 +1029,15 @@ function App() {
           )}
 
           {/* Overlays */}
-          <CommandPalette
-            open={paletteOpen}
-            onClose={() => setPaletteOpen(false)}
-            commands={paletteCommands}
-          />
+          {paletteOpen && (
+            <Suspense fallback={null}>
+              <CommandPalette
+                open
+                onClose={() => setPaletteOpen(false)}
+                commands={paletteCommands}
+              />
+            </Suspense>
+          )}
           <BroadcastDialog
             open={broadcastOpen}
             onClose={() => {
@@ -1071,16 +1080,20 @@ function App() {
               }
             }}
           />
-          <SettingsDialog
-            open={settingsOpen}
-            onClose={() => {
-              setSettingsOpen(false);
-              setSettingsInitialPage(undefined);
-            }}
-            onCheckForUpdates={() => { void runUpdateCheck("manual"); }}
-            coreInfo={coreInfo}
-            initialPage={settingsInitialPage}
-          />
+          {settingsOpen && (
+            <Suspense fallback={null}>
+              <SettingsDialog
+                open
+                onClose={() => {
+                  setSettingsOpen(false);
+                  setSettingsInitialPage(undefined);
+                }}
+                onCheckForUpdates={() => { void runUpdateCheck("manual"); }}
+                coreInfo={coreInfo}
+                initialPage={settingsInitialPage}
+              />
+            </Suspense>
+          )}
           <PortForwardDialog
             open={portForwardOpen}
             onClose={() => setPortForwardOpen(false)}

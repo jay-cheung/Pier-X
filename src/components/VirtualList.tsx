@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -7,6 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
+  type UIEvent as ReactUIEvent,
 } from "react";
 
 type Props<T> = {
@@ -64,6 +66,8 @@ export default function VirtualList<T>({
   scrollRef,
 }: Props<T>) {
   const innerRef = useRef<HTMLDivElement>(null);
+  const pendingScrollTopRef = useRef(0);
+  const scrollRafRef = useRef<number | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   // Initial height is 0 until we measure; with items.length > 0 this
   // temporarily renders zero rows. Acceptable — the layout effect resolves
@@ -78,6 +82,25 @@ export default function VirtualList<T>({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleScroll = (event: ReactUIEvent<HTMLDivElement>) => {
+    pendingScrollTopRef.current = event.currentTarget.scrollTop;
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const next = pendingScrollTopRef.current;
+      setScrollTop((prev) => (prev === next ? prev : next));
+    });
+  };
 
   const total = items.length;
   const visibleCount = Math.max(1, Math.ceil(viewportHeight / rowHeight));
@@ -99,7 +122,7 @@ export default function VirtualList<T>({
       ref={setRef}
       className={className}
       style={{ overflow: "auto", ...style }}
-      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      onScroll={handleScroll}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}

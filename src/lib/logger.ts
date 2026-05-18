@@ -53,12 +53,18 @@ async function flush() {
   const batch = queue;
   queue = [];
   if (!isRunningInTauri()) return;
-  for (const rec of batch) {
-    try {
-      await invoke("log_write", rec);
-    } catch {
-      // Swallow — a logger that errors on write would recurse via the
-      // error handler we install below. Better to lose the line.
+  try {
+    await invoke("log_write_batch", { records: batch });
+  } catch {
+    // Development/HMR can briefly run a frontend against an older backend.
+    // Fall back to the single-record command and still swallow failures so
+    // a logger write error never recurses through console.error.
+    for (const rec of batch) {
+      try {
+        await invoke("log_write", rec);
+      } catch {
+        /* lose the line rather than recurse */
+      }
     }
   }
 }

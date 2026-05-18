@@ -1,29 +1,31 @@
 import type { RightTool, TabState } from "../lib/types";
 import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { isBrowsableRepoPath } from "../lib/browserPath";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import * as cmd from "../lib/commands";
 import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
 import { useI18n } from "../i18n/useI18n";
 import { mapServiceToTool, useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import { useStatusStore } from "../stores/useStatusStore";
-import GitPanel from "../panels/GitPanel";
-import MySqlPanel from "../panels/MySqlPanel";
-import PostgresPanel from "../panels/PostgresPanel";
-import SqlitePanel from "../panels/SqlitePanel";
-import RedisPanel from "../panels/RedisPanel";
-import DockerPanel from "../panels/DockerPanel";
-import SftpPanel from "../panels/SftpPanel";
-import ServerMonitorPanel from "../panels/ServerMonitorPanel";
-import MarkdownPanel from "../panels/MarkdownPanel";
-import LogViewerPanel from "../panels/LogViewerPanel";
-import CodeSearchPanel from "../panels/CodeSearchPanel";
-import FirewallPanel from "../panels/FirewallPanel";
-import WebServerPanel from "../panels/WebServerPanel";
-import SoftwarePanel from "../panels/SoftwarePanel";
 import ToolStrip from "./ToolStrip";
 import ConnectSplash from "../components/ConnectSplash";
 import PanelHeader from "../components/PanelHeader";
+import PanelSkeleton from "../components/PanelSkeleton";
+
+const GitPanel = lazy(() => import("../panels/GitPanel"));
+const MySqlPanel = lazy(() => import("../panels/MySqlPanel"));
+const PostgresPanel = lazy(() => import("../panels/PostgresPanel"));
+const SqlitePanel = lazy(() => import("../panels/SqlitePanel"));
+const RedisPanel = lazy(() => import("../panels/RedisPanel"));
+const DockerPanel = lazy(() => import("../panels/DockerPanel"));
+const SftpPanel = lazy(() => import("../panels/SftpPanel"));
+const ServerMonitorPanel = lazy(() => import("../panels/ServerMonitorPanel"));
+const MarkdownPanel = lazy(() => import("../panels/MarkdownPanel"));
+const LogViewerPanel = lazy(() => import("../panels/LogViewerPanel"));
+const CodeSearchPanel = lazy(() => import("../panels/CodeSearchPanel"));
+const FirewallPanel = lazy(() => import("../panels/FirewallPanel"));
+const WebServerPanel = lazy(() => import("../panels/WebServerPanel"));
+const SoftwarePanel = lazy(() => import("../panels/SoftwarePanel"));
 
 type Props = {
   activeTab: TabState | null;
@@ -157,6 +159,16 @@ function rightHeaderMeta(
     return isBrowsableRepoPath(browserPath) ? basename(browserPath) : undefined;
   }
   return undefined;
+}
+
+function lazyFallbackFor(tool: RightTool) {
+  if (tool === "markdown") return <PanelSkeleton variant="prose" rows={8} />;
+  if (tool === "monitor") return <PanelSkeleton variant="chrome" rows={4} />;
+  if (tool === "mysql" || tool === "postgres" || tool === "redis" || tool === "sqlite") {
+    return <PanelSkeleton variant="grid" rows={8} />;
+  }
+  if (tool === "software") return <PanelSkeleton variant="rows" rows={9} />;
+  return <PanelSkeleton variant="rows" rows={8} />;
 }
 
 export default function RightSidebar({
@@ -395,6 +407,7 @@ export default function RightSidebar({
               behind,
             );
             const HeaderIcon = useOuterShell ? RIGHT_TOOL_META[tool].icon : undefined;
+            const lazyFallback = lazyFallbackFor(tool);
             return (
               <div
                 key={tool}
@@ -410,33 +423,37 @@ export default function RightSidebar({
                       meta={headerMeta}
                     />
                     <div className="panel-body">
-                      <ToolContent
-                        tool={tool}
-                        tab={activeTab}
-                        browserPath={browserPath}
-                        markdownPath={selectedMarkdownPath}
-                        unknownToolLabel={unknownTool}
-                        isActive={isActive}
-                        onConnectSaved={onConnectSaved}
-                        onNewConnection={onNewConnection}
-                        onEditConnection={onEditConnection}
-                        t={t}
-                      />
+                      <Suspense fallback={lazyFallback}>
+                        <ToolContent
+                          tool={tool}
+                          tab={activeTab}
+                          browserPath={browserPath}
+                          markdownPath={selectedMarkdownPath}
+                          unknownToolLabel={unknownTool}
+                          isActive={isActive}
+                          onConnectSaved={onConnectSaved}
+                          onNewConnection={onNewConnection}
+                          onEditConnection={onEditConnection}
+                          t={t}
+                        />
+                      </Suspense>
                     </div>
                   </>
                 ) : (
-                  <ToolContent
-                    tool={tool}
-                    tab={activeTab}
-                    browserPath={browserPath}
-                    markdownPath={selectedMarkdownPath}
-                    unknownToolLabel={unknownTool}
-                    isActive={isActive}
-                    onConnectSaved={onConnectSaved}
-                    onNewConnection={onNewConnection}
-                    onEditConnection={onEditConnection}
-                    t={t}
-                  />
+                  <Suspense fallback={lazyFallback}>
+                    <ToolContent
+                      tool={tool}
+                      tab={activeTab}
+                      browserPath={browserPath}
+                      markdownPath={selectedMarkdownPath}
+                      unknownToolLabel={unknownTool}
+                      isActive={isActive}
+                      onConnectSaved={onConnectSaved}
+                      onNewConnection={onNewConnection}
+                      onEditConnection={onEditConnection}
+                      t={t}
+                    />
+                  </Suspense>
                 )}
               </div>
             );

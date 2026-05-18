@@ -3,7 +3,7 @@ import { Lock, X } from "lucide-react";
 import IconButton from "./IconButton";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
-import { modeToSymbolic } from "../lib/sftpEditor";
+import { modeToSymbolic } from "../lib/sftpEditorMeta";
 
 type Props = {
   open: boolean;

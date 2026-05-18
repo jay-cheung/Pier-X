@@ -22,7 +22,7 @@ import {
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { ComponentType } from "react";
 import * as cmd from "../lib/commands";
@@ -38,7 +38,6 @@ import { useConnectionStore } from "../stores/useConnectionStore";
 import ChmodDialog from "../components/ChmodDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DismissibleNote from "../components/DismissibleNote";
-import SftpEditorDialog from "../components/SftpEditorDialog";
 import SftpNewEntryDialog from "../components/SftpNewEntryDialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { writeClipboardText } from "../lib/clipboard";
@@ -49,13 +48,7 @@ import {
 } from "../stores/useSftpBookmarksStore";
 import { useTabStore } from "../stores/useTabStore";
 import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
-
-// Module-scope constant for "no bookmarks". Kept out of the
-// zustand selector so two consecutive renders get the *same*
-// reference — otherwise getSnapshot sees a new `[]` every time
-// and React flags an infinite update loop.
-const EMPTY_BOOKMARKS: SftpBookmark[] = [];
-import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditor";
+import { isEditableFilename, MAX_EDITOR_BYTES, modeToSymbolic } from "../lib/sftpEditorMeta";
 import {
   DT_LOCAL_FILE,
   DT_SFTP_FILE,
@@ -65,6 +58,13 @@ import {
   type LocalDragPayload,
   type SftpDragPayload,
 } from "../lib/sftpDrag";
+
+// Module-scope constant for "no bookmarks". Kept out of the
+// zustand selector so two consecutive renders get the *same*
+// reference — otherwise getSnapshot sees a new `[]` every time
+// and React flags an infinite update loop.
+const EMPTY_BOOKMARKS: SftpBookmark[] = [];
+const SftpEditorDialog = lazy(() => import("../components/SftpEditorDialog"));
 
 /** Row height for virtualized entries, matching `.ftp-row` in shell.css
  *  (12px font · 6px padding top+bottom · 1px border). Kept in sync
@@ -1632,16 +1632,18 @@ function SftpPanelBody({ tab }: Props) {
         )}
 
         {editorTarget && (
-          <SftpEditorDialog
-            open
-            path={editorTarget.path}
-            name={editorTarget.name}
-            size={editorTarget.size}
-            sshArgs={sshArgs}
-            ownerLabel={displayUser || sshArgs.user}
-            onClose={() => setEditorTarget(null)}
-            onSaved={() => void browse(currentRemotePath)}
-          />
+          <Suspense fallback={null}>
+            <SftpEditorDialog
+              open
+              path={editorTarget.path}
+              name={editorTarget.name}
+              size={editorTarget.size}
+              sshArgs={sshArgs}
+              ownerLabel={displayUser || sshArgs.user}
+              onClose={() => setEditorTarget(null)}
+              onSaved={() => void browse(currentRemotePath)}
+            />
+          </Suspense>
         )}
 
         <SftpNewEntryDialog

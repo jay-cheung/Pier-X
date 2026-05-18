@@ -14501,6 +14501,23 @@ fn log_write(level: String, source: String, message: String) {
     pier_core::logging::write_event(&level, &source, &message);
 }
 
+#[derive(Deserialize)]
+struct FrontendLogRecord {
+    level: String,
+    source: String,
+    message: String,
+}
+
+/// Append multiple frontend log records in one IPC hop. Console bursts
+/// can be high-volume when a panel is failing; batching keeps diagnostic
+/// capture from becoming the source of UI latency.
+#[tauri::command]
+fn log_write_batch(records: Vec<FrontendLogRecord>) {
+    for rec in records {
+        pier_core::logging::write_event(&rec.level, &rec.source, &rec.message);
+    }
+}
+
 /// Toggle the "verbose diagnostics" gate. Off by default. When on,
 /// diagnostic records that contain remote-machine output (hostnames,
 /// `ps` command names, probe stdout excerpts) are written to the log
@@ -15093,6 +15110,7 @@ pub fn run() {
             local_process_kill,
             server_monitor_process_kill,
             log_write,
+            log_write_batch,
             log_file_path,
             log_read_tail,
             log_clear,

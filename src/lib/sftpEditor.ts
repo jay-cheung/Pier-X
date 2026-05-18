@@ -20,51 +20,14 @@ import { EditorView } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import type { Extension } from "@codemirror/state";
+import { extensionOf } from "./sftpEditorMeta";
 
-/** Upper bound shipped to the backend and enforced on the UI side
- *  too. Backend caps at 5 MB regardless. */
-export const MAX_EDITOR_BYTES = 5 * 1024 * 1024;
-
-/** Extensions the editor opens without a size-gate prompt. Anything
- *  else still opens if under the byte limit, but large unknown files
- *  trip the confirmation. */
-const TEXT_EXTENSIONS = new Set([
-  "sh", "bash", "zsh", "fish",
-  "conf", "cfg", "ini", "properties", "env",
-  "json", "yaml", "yml", "toml",
-  "js", "mjs", "cjs", "ts", "tsx", "jsx",
-  "py", "rb", "go", "rs", "java", "kt", "swift", "php", "pl", "lua",
-  "md", "markdown", "rst", "txt", "log",
-  "xml", "html", "htm", "svg", "css", "scss", "less",
-  "sql", "service", "socket", "timer", "mount",
-  "c", "h", "cc", "cpp", "hpp",
-  "dockerfile", "tf", "hcl",
-]);
-
-/** Filenames treated as editable regardless of extension. */
-const TEXT_FILENAMES = new Set([
-  "Dockerfile", "Makefile", "Rakefile", "Gemfile", "Vagrantfile",
-  ".bashrc", ".zshrc", ".profile", ".bash_profile", ".gitconfig",
-  ".vimrc", ".tmux.conf", ".env", ".npmrc",
-]);
-
-function extensionOf(name: string): string {
-  const idx = name.lastIndexOf(".");
-  if (idx < 0 || idx === name.length - 1) return "";
-  return name.slice(idx + 1).toLowerCase();
-}
-
-export function isEditableFilename(name: string): boolean {
-  if (!name) return false;
-  if (TEXT_FILENAMES.has(name)) return true;
-  const ext = extensionOf(name);
-  if (!ext) {
-    // no-extension files are often editable (scripts, configs); the
-    // backend size gate is the real safety net.
-    return true;
-  }
-  return TEXT_EXTENSIONS.has(ext);
-}
+export {
+  MAX_EDITOR_BYTES,
+  isEditableFilename,
+  languageLabel,
+  modeToSymbolic,
+} from "./sftpEditorMeta";
 
 /** Pick a CodeMirror language support for a filename. Returns
  *  `null` when no mode matches — the editor then falls back to
@@ -120,49 +83,6 @@ export function languageFromFilename(name: string): Extension | null {
       return StreamLanguage.define(css);
     default:
       return null;
-  }
-}
-
-/** Short human label of the detected language, shown in the status
- *  bar. Parallel switch to [`languageFromFilename`] but returns a
- *  user-facing name instead of a CM6 extension. */
-export function languageLabel(name: string): string {
-  const lower = name.toLowerCase();
-  if (lower === "dockerfile" || lower.endsWith(".dockerfile")) return "Dockerfile";
-  const ext = extensionOf(name);
-  switch (ext) {
-    case "json": return "JSON";
-    case "yaml":
-    case "yml": return "YAML";
-    case "py": return "Python";
-    case "js":
-    case "mjs":
-    case "cjs": return "JavaScript";
-    case "ts": return "TypeScript";
-    case "jsx": return "JSX";
-    case "tsx": return "TSX";
-    case "sh":
-    case "bash":
-    case "zsh":
-    case "fish": return "Shell";
-    case "env": return "dotenv";
-    case "toml": return "TOML";
-    case "properties":
-    case "ini":
-    case "cfg":
-    case "conf": return "Config";
-    case "nginx": return "Nginx";
-    case "xml":
-    case "html":
-    case "htm":
-    case "svg": return "XML";
-    case "css": return "CSS";
-    case "scss": return "SCSS";
-    case "less": return "LESS";
-    case "md":
-    case "markdown": return "Markdown";
-    case "sql": return "SQL";
-    default: return ext ? ext.toUpperCase() : "Plain Text";
   }
 }
 
@@ -351,16 +271,6 @@ export function buildEditorTheme(dark: boolean = true): Extension[] {
   ]);
 
   return [theme, syntaxHighlighting(highlight)];
-}
-
-/** Format octal mode as `rwxrwxrwx`. Used by both the chmod dialog
- *  (live preview) and the properties view. */
-export function modeToSymbolic(mode: number): string {
-  const bits = mode & 0o777;
-  const flag = (b: number, ch: string) => (b ? ch : "-");
-  const trio = (m: number) =>
-    flag(m & 0o4, "r") + flag(m & 0o2, "w") + flag(m & 0o1, "x");
-  return trio((bits >> 6) & 0o7) + trio((bits >> 3) & 0o7) + trio(bits & 0o7);
 }
 
 /** Lucide size="?" acceptor — keeps the typing consistent between
