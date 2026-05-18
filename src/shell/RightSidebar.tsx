@@ -47,6 +47,8 @@ type Props = {
 type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "search" | "sftp" | "firewall" | "webserver" | "software";
 
 const DB_DETECTION_TOOLS = new Set<RightTool>(["mysql", "postgres", "redis"]);
+const SERVICE_DETECTION_DELAY_MS = 2_000;
+const EMPTY_DETECTED_TOOLS = new Set<RightTool>();
 
 function renderSplash(
   kind: SplashTool,
@@ -258,11 +260,14 @@ export default function RightSidebar({
   useEffect(() => {
     // Run detection any time we have an SSH target on the tab —
     // primary, local-mirror, or nested overlay. The store-entry
-    // guard prevents re-running for already-detected tabs. For
+    // guard prevents re-running for already-detected tabs. Delay
+    // and skip while collapsed so first SSH paint / monitor probe
+    // get priority over cosmetic service chips. For
     // real SSH-backend tabs we additionally wait for the terminal
     // session to come up so detect_services hits the cached
     // russh handle instead of racing the terminal's own handshake
     // — same reasoning as the gating in ServerMonitorPanel.
+    if (!expanded) return;
     if (!activeTab || !activeSshTarget || !activeSshReady) return;
     if (detectedEntry) return;
     if (activeTab.backend === "ssh" && activeTab.terminalSessionId === null) return;
@@ -293,7 +298,7 @@ export default function RightSidebar({
         .catch(() => {
           if (!cancelled) setError(tabId);
         });
-    }, 600);
+    }, SERVICE_DETECTION_DELAY_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -316,6 +321,7 @@ export default function RightSidebar({
     activeSshReady,
     (activeSshTarget?.password.length ?? 0) > 0,
     detectedEntry,
+    expanded,
     setPending,
     setReady,
     setError,
@@ -387,7 +393,7 @@ export default function RightSidebar({
   ]);
 
   const detectedTools = useMemo(
-    () => detectedEntry?.tools ?? new Set<RightTool>(),
+    () => detectedEntry?.tools ?? EMPTY_DETECTED_TOOLS,
     [detectedEntry],
   );
 
