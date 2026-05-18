@@ -6712,7 +6712,36 @@ fn markdown_render_file(path: String) -> Result<String, String> {
 // fast 5 s tier doesn't burn SSH / remote CPU re-running them every
 // poll. The frontend caches the prior full snapshot's disks in between.
 #[tauri::command]
-fn server_monitor_probe(
+async fn server_monitor_probe(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    include_disks: bool,
+) -> Result<ServerSnapshotView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        server_monitor_probe_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            include_disks,
+        )
+    })
+    .await
+    .map_err(|error| format!("server_monitor_probe join: {error}"))?
+}
+
+fn server_monitor_probe_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -6891,7 +6920,36 @@ fn server_snapshot_to_view(
 // ── Firewall ──────────────────────────────────────────────────────
 
 #[tauri::command]
-fn firewall_snapshot(
+async fn firewall_snapshot(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+    sudo_password: Option<String>,
+) -> Result<firewall::FirewallSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        firewall_snapshot_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            saved_connection_index,
+            sudo_password,
+        )
+    })
+    .await
+    .map_err(|error| format!("firewall_snapshot join: {error}"))?
+}
+
+fn firewall_snapshot_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
