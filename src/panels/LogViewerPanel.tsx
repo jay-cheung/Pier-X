@@ -26,7 +26,7 @@ import {
   MODES,
 } from "../lib/logSource";
 import type { LogEventView, LogSource, LogSourceMode, SftpEntryView, TabState } from "../lib/types";
-import { DEFAULT_LOG_SOURCE, effectiveShellUser, effectiveSshTarget } from "../lib/types";
+import { DEFAULT_LOG_SOURCE, effectiveShellUser, effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DismissibleNote from "../components/DismissibleNote";
@@ -126,6 +126,7 @@ function LogViewerPanelBody({ tab }: Props) {
   // user@host` or from a nested-ssh overlay on top of a real SSH tab.
   const sshTarget = effectiveSshTarget(tab);
   const hasSsh = sshTarget !== null;
+  const canUseSsh = isSshTargetReady(sshTarget);
   const sshArgs = {
     host: sshTarget?.host ?? "",
     port: sshTarget?.port ?? 22,
@@ -202,7 +203,7 @@ function LogViewerPanelBody({ tab }: Props) {
    *  live stream — the user backfilled to inspect, restarting tail -F
    *  would scroll them away from what they just loaded. */
   async function runBackfill(windowMinutes: number) {
-    if (!hasSsh || backfillBusy) return;
+    if (!canUseSsh || backfillBusy) return;
     const command = compileLogSourceBackfill(source, windowMinutes);
     if (!command) {
       setError(t("This source can't be back-filled."));
@@ -242,7 +243,7 @@ function LogViewerPanelBody({ tab }: Props) {
   }
 
   async function startStream() {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     const command = compileLogSource(source);
     if (!command) {
       setError(t("Select a log source before starting."));
@@ -372,7 +373,7 @@ function LogViewerPanelBody({ tab }: Props) {
   }, [streamId]);
 
   async function scanFileDir() {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     const dir = fileDirDraft.trim() || "/var/log";
     setScanBusy(true);
     setScanError("");
@@ -409,7 +410,7 @@ function LogViewerPanelBody({ tab }: Props) {
 
   const streaming = !!streamId;
   const compiled = compileLogSource(source);
-  const canStart = hasSsh && compiled.length > 0;
+  const canStart = canUseSsh && compiled.length > 0;
 
   const headerMeta = streaming
     ? linesPerSecond >= 0.5
@@ -528,7 +529,7 @@ function LogViewerPanelBody({ tab }: Props) {
             (custom command or empty file path). */}
         {(() => {
           const canBackfill =
-            !!hasSsh &&
+            canUseSsh &&
             !backfillBusy &&
             compileLogSourceBackfill(source, 1).length > 0;
           return (
@@ -583,7 +584,7 @@ function LogViewerPanelBody({ tab }: Props) {
               type="button"
               className="btn is-ghost is-compact"
               onClick={() => void scanFileDir()}
-              disabled={!hasSsh || scanBusy}
+              disabled={!canUseSsh || scanBusy}
               title={t("Scan directory")}
             >
               <RefreshCw size={10} />

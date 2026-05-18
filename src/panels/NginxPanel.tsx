@@ -127,7 +127,7 @@ function NginxPanelBody({ tab }: Props) {
   ]);
 
   const sshParams = useMemo(() => {
-    if (!sshTarget) return null;
+    if (!canProbe || !sshTarget) return null;
     return {
       host: sshTarget.host,
       port: sshTarget.port,
@@ -147,6 +147,7 @@ function NginxPanelBody({ tab }: Props) {
     sshTarget?.keyPath,
     sshTarget?.savedConnectionIndex,
     sudoPassword,
+    canProbe,
   ]);
 
   // Sudo prompt: fires whenever a backend call rejects with a

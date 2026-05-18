@@ -5,7 +5,7 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
 import type { DbCredential, DbKind, DetectedDbInstance, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../stores/useDetectedServicesStore";
 import ConfirmDialog from "./ConfirmDialog";
@@ -46,6 +46,7 @@ export default function DbInstancePicker({
   const formatError = (e: unknown) => localizeError(e, t);
 
   const sshTarget = effectiveSshTarget(tab);
+  const sshReady = isSshTargetReady(sshTarget);
   const savedIndex = sshTarget?.savedConnectionIndex ?? null;
 
   const connection = useConnectionStore((s) =>
@@ -86,7 +87,7 @@ export default function DbInstancePicker({
   // Lazy-trigger detection the first time the picker mounts for
   // a tab that has SSH context. Also re-triggers when stale.
   useEffect(() => {
-    if (!sshTarget) return;
+    if (!sshReady || !sshTarget) return;
     const entry = instancesEntry;
     const fresh = entry?.status === "ready" && Date.now() - entry.at < DETECTION_TTL_MS;
     if (fresh || entry?.status === "pending") return;
@@ -124,10 +125,20 @@ export default function DbInstancePicker({
     // a guard to skip re-running while pending or still fresh, and
     // including it would trigger a re-fetch on every state update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id, sshTarget?.host, sshTarget?.port, sshTarget?.user, kind]);
+  }, [
+    tab.id,
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+    (sshTarget?.password.length ?? 0) > 0,
+    sshReady,
+    kind,
+  ]);
 
   async function refreshDetection() {
-    if (!sshTarget) return;
+    if (!sshReady || !sshTarget) return;
     setPending(tab.id);
     try {
       const report = await cmd.dbDetect({

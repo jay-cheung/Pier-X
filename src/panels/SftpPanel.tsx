@@ -301,9 +301,10 @@ function SftpPanelBody({ tab }: Props) {
   // collapses all three so this panel works in any of those modes.
   const sshTarget = effectiveSshTarget(tab);
   const hasSsh = sshTarget !== null;
+  const canUseSsh = isSshTargetReady(sshTarget);
   // Spread-friendly version of the SSH addressing for command calls.
   // Falls back to inert defaults when there's no target — every
-  // call site is gated behind `hasSsh` / `sshTarget` first, so the
+  // call site is gated behind `canUseSsh` / `sshTarget` first, so the
   // empty values never reach the backend.
   const sftpSudoPassword = useSudoStore((s) =>
     sshTarget
@@ -430,7 +431,7 @@ function SftpPanelBody({ tab }: Props) {
   // in device pixels so dropping onto an adjacent panel (Git, Docker)
   // doesn't trigger an upload here. Only fires when SFTP is active.
   useEffect(() => {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     let disposed = false;
     let unlisten: (() => void) | null = null;
 
@@ -470,10 +471,10 @@ function SftpPanelBody({ tab }: Props) {
       setOsDropHover(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasSsh, currentRemotePath, sshArgs.host, sshArgs.port, sshArgs.user, sshArgs.authMode]);
+  }, [canUseSsh, currentRemotePath, sshArgs.host, sshArgs.port, sshArgs.user, sshArgs.authMode]);
 
   async function browse(targetPath = path, opts: { pushHistory?: boolean } = {}) {
-    if (!hasSsh) {
+    if (!canUseSsh) {
       setError(sshRequired);
       return;
     }
@@ -548,7 +549,7 @@ function SftpPanelBody({ tab }: Props) {
    *  `newEntryKind`, then refreshes the listing. */
   async function submitNewEntry() {
     const name = newEntryName.trim();
-    if (!hasSsh || !name) return;
+    if (!canUseSsh || !name) return;
     const targetPath = joinRemotePath(currentRemotePath, name);
     setActionBusy(true);
     setError("");
@@ -582,7 +583,7 @@ function SftpPanelBody({ tab }: Props) {
   }
 
   async function commitInlineRename() {
-    if (!hasSsh || !renamingPath) return;
+    if (!canUseSsh || !renamingPath) return;
     const draft = renameDraft.trim();
     const current = state?.entries.find((e) => e.path === renamingPath);
     if (!current) {
@@ -615,7 +616,7 @@ function SftpPanelBody({ tab }: Props) {
    *  once the user confirms. The context-menu "Delete" action just
    *  stages the entry via `setDeleteTarget`. */
   async function performRemove(entry: SftpEntryView) {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     setActionBusy(true);
     setError("");
     setNotice("");
@@ -633,7 +634,7 @@ function SftpPanelBody({ tab }: Props) {
   /** Server-side copy via read+write (no atomic `cp` in SFTP). Gated
    *  on size because the whole file traverses the wire twice. */
   async function duplicateEntry(entry: SftpEntryView) {
-    if (!hasSsh || entry.isDir) {
+    if (!canUseSsh || entry.isDir) {
       setError(t("Duplicate only works on files."));
       return;
     }
@@ -691,7 +692,7 @@ function SftpPanelBody({ tab }: Props) {
    *  We don't surface watcher status here — that's the dialog's job;
    *  callers from the context menu just get a confirmation notice. */
   async function openEntryExternally(entry: SftpEntryView) {
-    if (!hasSsh || entry.isDir) return;
+    if (!canUseSsh || entry.isDir) return;
     setActionBusy(true);
     setError("");
     setNotice("");
@@ -725,7 +726,7 @@ function SftpPanelBody({ tab }: Props) {
     entry: { path: string; name: string },
     localDir: string,
   ): Promise<void> {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     const localPath = joinLocalPath(localDir, entry.name);
     const id = pushTransfer({
       direction: "dn",
@@ -755,7 +756,7 @@ function SftpPanelBody({ tab }: Props) {
    *  through `selectedEntry` state (which would be stale for a
    *  right-click on an unselected row). */
   async function downloadEntryPick(entry: SftpEntryView) {
-    if (!hasSsh || entry.isDir) return;
+    if (!canUseSsh || entry.isDir) return;
     try {
       const picked = await openDialog({
         directory: true,
@@ -779,7 +780,7 @@ function SftpPanelBody({ tab }: Props) {
    *  `Promise.all` later if pier-core's sftp channel grows concurrent
    *  transfer support. */
   async function uploadLocalFiles(localPaths: string[], remoteDir: string): Promise<void> {
-    if (!hasSsh || localPaths.length === 0) return;
+    if (!canUseSsh || localPaths.length === 0) return;
     setActionBusy(true);
     setError("");
     setNotice("");
@@ -819,7 +820,7 @@ function SftpPanelBody({ tab }: Props) {
   /** Open a native file picker (multi-select) and upload the chosen
    *  files into the current remote directory. */
   async function uploadPick() {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     try {
       const picked = await openDialog({
         directory: false,
@@ -979,7 +980,7 @@ function SftpPanelBody({ tab }: Props) {
     // handler stops propagation so this never sees row-level events.
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ftp-row")) return;
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     event.preventDefault();
     setCtxMenu({ kind: "empty", x: event.clientX, y: event.clientY });
   }
@@ -991,13 +992,13 @@ function SftpPanelBody({ tab }: Props) {
   // drags *out* of the SFTP panel (remote→local) set `DT_SFTP_FILE`
   // which is handled by the Sidebar on its side.
   function handleListDragEnter(event: ReactDragEvent<HTMLDivElement>) {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
     event.preventDefault();
     setDropDepth((d) => d + 1);
   }
   function handleListDragOver(event: ReactDragEvent<HTMLDivElement>) {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     if (!hasDragPayload(event.dataTransfer, DT_LOCAL_FILE)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
@@ -1009,7 +1010,7 @@ function SftpPanelBody({ tab }: Props) {
   }
   function handleListDrop(event: ReactDragEvent<HTMLDivElement>) {
     setDropDepth(0);
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     const payload = readDragPayload(event.dataTransfer, DT_LOCAL_FILE, "local-file");
     if (!payload) return;
     event.preventDefault();
@@ -1031,7 +1032,7 @@ function SftpPanelBody({ tab }: Props) {
    *  directory. Creates a single transfer queue entry for the whole
    *  folder and lets the backend aggregate byte-level progress. */
   async function uploadLocalTree(dir: LocalDragPayload) {
-    if (!hasSsh) return;
+    if (!canUseSsh) return;
     const remotePath = joinRemotePath(currentRemotePath, dir.name);
     const id = pushTransfer({
       direction: "up",
@@ -1245,7 +1246,7 @@ function SftpPanelBody({ tab }: Props) {
     // Empty / loading states stay non-virtualized — they're single-line
     // hints, not lists. The virtualized list takes over as soon as we
     // have entries.
-    if (!hasSsh) {
+    if (!hasSsh || !canUseSsh) {
       return (
         <div
           className={"ftp-list" + (dropHover ? " is-drop" : "")}
@@ -1414,7 +1415,7 @@ function SftpPanelBody({ tab }: Props) {
               type="button"
               className="lg-ic"
               title={currentIsBookmarked ? t("Remove bookmark") : t("Bookmark this path")}
-              disabled={!hasSsh || !state}
+              disabled={!canUseSsh || !state}
               onClick={() => setBookmarksOpen((o) => !o)}
             >
               {currentIsBookmarked ? (
@@ -1513,7 +1514,7 @@ function SftpPanelBody({ tab }: Props) {
             type="button"
             className="lg-ic"
             title={t("New file or folder")}
-            disabled={!hasSsh || !state}
+            disabled={!canUseSsh || !state}
             onClick={() => openNewEntryDialog("file")}
           >
             <Plus size={12} />
@@ -1522,7 +1523,7 @@ function SftpPanelBody({ tab }: Props) {
             type="button"
             className="lg-ic"
             title={t("Upload from local")}
-            disabled={!hasSsh || !state || actionBusy}
+            disabled={!canUseSsh || !state || actionBusy}
             onClick={() => void uploadPick()}
           >
             <Upload size={12} />
@@ -1531,7 +1532,7 @@ function SftpPanelBody({ tab }: Props) {
             type="button"
             className="lg-ic"
             title={t("Refresh")}
-            disabled={!hasSsh || busy}
+            disabled={!canUseSsh || busy}
             onClick={() => void browse(currentRemotePath)}
           >
             <RefreshCw size={12} className={busy ? "ftp-spin" : ""} />

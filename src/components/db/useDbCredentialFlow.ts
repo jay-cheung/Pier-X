@@ -11,7 +11,7 @@ import type {
   DetectedDbInstance,
   TabState,
 } from "../../lib/types";
-import { effectiveSshTarget } from "../../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../../lib/types";
 import { useConnectionStore } from "../../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../../stores/useDetectedServicesStore";
 import { useTabStore } from "../../stores/useTabStore";
@@ -155,6 +155,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
 
   const sshTarget = effectiveSshTarget(tab);
   const hasSsh = sshTarget !== null;
+  const sshReady = isSshTargetReady(sshTarget);
   const savedIndex = sshTarget?.savedConnectionIndex ?? null;
 
   const [tunnelBusy, setTunnelBusy] = useState(false);
@@ -229,7 +230,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
         : "idle";
 
   async function refreshDetection() {
-    if (!sshTarget) return;
+    if (!sshReady || !sshTarget) return;
     setDetectionPending(tab.id);
     try {
       const report = await cmd.dbDetect({
@@ -295,6 +296,9 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     if (!hasSsh) {
       return { host: tabHost.trim(), port: tabPort };
     }
+    if (!sshReady) {
+      throw new Error(t("SSH credentials are not ready yet."));
+    }
     const info = await ensureTunnelSlot({
       tab,
       slot: tunnelSlot,
@@ -308,7 +312,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   }
 
   async function rebuildTunnel() {
-    if (!hasSsh) return;
+    if (!hasSsh || !sshReady) return;
     setTunnelBusy(true);
     setTunnelError("");
     try {

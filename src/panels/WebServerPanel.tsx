@@ -84,7 +84,7 @@ function WebServerPanelBody({ tab }: Props) {
   ]);
 
   const sshParams = useMemo(() => {
-    if (!sshTarget) return null;
+    if (!canProbe || !sshTarget) return null;
     return {
       host: sshTarget.host,
       port: sshTarget.port,
@@ -105,6 +105,7 @@ function WebServerPanelBody({ tab }: Props) {
     sshTarget?.keyPath,
     sshTarget?.savedConnectionIndex,
     sudoPassword,
+    canProbe,
   ]);
 
   const [detection, setDetection] = useState<WebServerDetection | null>(null);

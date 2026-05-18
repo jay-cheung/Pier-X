@@ -1212,7 +1212,7 @@ function DockerPanelBody({ tab }: Props) {
               <button
                 type="button"
                 className="btn is-compact"
-                disabled={statsBusy || !state || !(state?.containers.length)}
+                disabled={!canProbe || statsBusy || !state || !(state?.containers.length)}
                 onClick={() => void fetchContainerStats()}
                 title={t("Sample CPU and memory for running containers")}
               >

@@ -38,7 +38,7 @@ import type {
   SqliteBrowserState,
   TabState,
 } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
+import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import { softwareKeyForTab } from "../stores/useSoftwareStore";
 import { useSoftwareSnapshot } from "../lib/softwareInstall";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
@@ -69,10 +69,11 @@ function SqlitePanelBody({ tab }: Props) {
 
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
   const hasSsh = sshTarget !== null;
+  const sshReady = isSshTargetReady(sshTarget);
   const swKey = tab ? softwareKeyForTab(tab) : null;
   const sshParams = useMemo(
     () =>
-      sshTarget
+      sshReady && sshTarget
         ? {
             host: sshTarget.host,
             port: sshTarget.port,
@@ -91,6 +92,7 @@ function SqlitePanelBody({ tab }: Props) {
       sshTarget?.password,
       sshTarget?.keyPath,
       sshTarget?.savedConnectionIndex,
+      sshReady,
     ],
   );
   useSoftwareSnapshot(swKey, sshParams);
@@ -134,7 +136,7 @@ function SqlitePanelBody({ tab }: Props) {
   const [manualPath, setManualPath] = useState("");
 
   const isRemoteMode =
-    hasSsh && remoteStatus.kind === "installed" && remoteStatus.supportsJson;
+    sshReady && remoteStatus.kind === "installed" && remoteStatus.supportsJson;
 
   // Poll for OSC 7 CWD — same cadence + rationale as before.
   useEffect(() => {
@@ -170,7 +172,7 @@ function SqlitePanelBody({ tab }: Props) {
   }, [shellCwd, scanInputTouched]);
 
   useEffect(() => {
-    if (!hasSsh || !sshTarget) {
+    if (!hasSsh || !sshReady || !sshTarget) {
       setRemoteStatus({ kind: "local-only" });
       return;
     }
@@ -204,9 +206,18 @@ function SqlitePanelBody({ tab }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [hasSsh, sshTarget?.host, sshTarget?.port, sshTarget?.user]);
+  }, [
+    hasSsh,
+    sshReady,
+    sshTarget?.host,
+    sshTarget?.port,
+    sshTarget?.user,
+    sshTarget?.authMode,
+    sshTarget?.savedConnectionIndex,
+    (sshTarget?.password.length ?? 0) > 0,
+  ]);
 
-  const canBrowse = path.trim().length > 0;
+  const canBrowse = path.trim().length > 0 && (!hasSsh || sshReady);
   const needsWrite = sql.trim() !== "" && !isReadOnlySql(sql);
   const canRun =
     canBrowse &&

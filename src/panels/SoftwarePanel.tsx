@@ -60,7 +60,7 @@ import {
   makeScheduleId,
   type BundleSchedule,
 } from "../lib/bundleSchedule";
-import { effectiveShellUser, effectiveSshTarget, type TabState } from "../lib/types";
+import { effectiveShellUser, effectiveSshTarget, isSshTargetReady, type TabState } from "../lib/types";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import {
@@ -182,6 +182,7 @@ function SoftwarePanelBody({ tab }: Props) {
   const formatError = (error: unknown) => localizeError(error, t);
 
   const sshTarget = tab ? effectiveSshTarget(tab) : null;
+  const sshReady = isSshTargetReady(sshTarget);
   const displayUser = tab && sshTarget ? effectiveShellUser(tab, sshTarget) : "";
   const swKey = tab ? softwareKeyForTab(tab) : null;
 
@@ -412,7 +413,7 @@ function SoftwarePanelBody({ tab }: Props) {
   sudoPromptRef.current = sudoPrompt;
 
   const sshParams = useMemo(() => {
-    if (!sshTarget) return null;
+    if (!sshReady || !sshTarget) return null;
     return {
       host: sshTarget.host,
       port: sshTarget.port,
@@ -430,6 +431,7 @@ function SoftwarePanelBody({ tab }: Props) {
     sshTarget?.password,
     sshTarget?.keyPath,
     sshTarget?.savedConnectionIndex,
+    sshReady,
   ]);
 
   // Hydrate the elevation password from the OS keychain into the
@@ -2272,7 +2274,7 @@ function SoftwarePanelBody({ tab }: Props) {
           type="button"
           className="btn is-ghost is-compact"
           onClick={() => void probe()}
-          disabled={probing}
+          disabled={!sshParams || probing}
           title={t("Re-probe host")}
         >
           <RefreshCw size={10} /> {probing ? t("Probing...") : t("Refresh")}
