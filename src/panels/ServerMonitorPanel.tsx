@@ -32,6 +32,7 @@ import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
 import { logEvent } from "../lib/logger";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
+import "../styles/monitor-panel.css";
 
 type Props = {
   tab: TabState;
