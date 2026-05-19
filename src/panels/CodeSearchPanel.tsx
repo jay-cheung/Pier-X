@@ -28,6 +28,7 @@ import { localizeError } from "../i18n/localizeMessage";
 import PanelHeader from "../components/PanelHeader";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
+import "../styles/code-search-panel.css";
 
 const SEARCH_ICON = RIGHT_TOOL_META.search.icon;
 const SftpEditorDialog = lazy(() => import("../components/SftpEditorDialog"));

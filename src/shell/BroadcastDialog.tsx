@@ -14,6 +14,7 @@ import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { useTabStore } from "../stores/useTabStore";
 import { toast } from "../stores/useToastStore";
+import "../styles/broadcast-dialog.css";
 
 type Props = {
   open: boolean;

@@ -360,3 +360,45 @@
   text-align: center;
 }
 .terminal-placeholder--error { color: var(--neg); }
+
+
+/* ── Terminal snippets dialog ───────────────────────────────── */
+.term-snip-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--sp-2);
+}
+.term-snip-row__head {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+.term-snip-row__head .dlg-input { flex: 1; }
+.term-snip-row__flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--size-micro);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.term-snip-row__cmd {
+  width: 100%;
+  resize: vertical;
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  padding: var(--sp-1) var(--sp-2);
+  font-family: var(--mono);
+  font-size: var(--ui-fs-sm);
+}
+.term-snip-add {
+  display: flex;
+  justify-content: flex-end;
+}

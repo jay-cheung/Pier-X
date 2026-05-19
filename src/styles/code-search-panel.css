@@ -1,0 +1,191 @@
+/* Code Search panel (M8) ---------------------------------------- */
+.cs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.cs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+}
+.cs-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.cs-input-icon {
+  position: absolute;
+  left: var(--sp-2);
+  color: var(--muted);
+  pointer-events: none;
+}
+.cs-input {
+  flex: 1;
+  padding-left: calc(var(--sp-2) + 14px);
+  padding-right: calc(var(--sp-2) + 16px);
+}
+.cs-input-clear {
+  position: absolute;
+  right: var(--sp-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+.cs-input-clear:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.cs-inline-clear {
+  position: static;
+  flex: 0 0 auto;
+}
+.cs-toggles {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.cs-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.cs-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.cs-toggle.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+.cs-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cs-cwd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+}
+.cs-cwd-input {
+  flex: 1;
+  font-size: var(--ui-fs-sm);
+  height: 24px;
+}
+.cs-engine-badge {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  font-size: var(--size-micro);
+  color: var(--svc-search);
+  background: var(--surface-2);
+}
+.cs-error {
+  flex: 0 0 auto;
+}
+.cs-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.cs-spin {
+  animation: cs-spin 0.9s linear infinite;
+}
+@keyframes cs-spin {
+  to { transform: rotate(360deg); }
+}
+.cs-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.cs-file {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  overflow: hidden;
+}
+.cs-file-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--ui-fs-sm);
+}
+.cs-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+.cs-file-count {
+  font-size: var(--size-micro);
+}
+.cs-file-hits {
+  display: flex;
+  flex-direction: column;
+}
+.cs-hit {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-2);
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.cs-hit:last-child {
+  border-bottom: none;
+}
+.cs-hit:hover {
+  background: var(--accent-subtle);
+}
+.cs-hit-loc {
+  flex: 0 0 auto;
+  min-width: 48px;
+  font-size: var(--size-micro);
+}
+.cs-hit-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+.cs-truncated {
+  flex: 0 0 auto;
+}
