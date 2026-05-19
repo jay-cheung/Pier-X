@@ -5,6 +5,7 @@ import { useI18n } from "../../i18n/useI18n";
 import DbSplashRow, { type DbSplashRowData } from "./DbSplashRow";
 import { DB_THEMES } from "./dbTheme";
 import type { DbKind } from "../../lib/types";
+import "../../styles/db-panel.css";
 
 type ProbeState = "idle" | "scanning" | "error";
 

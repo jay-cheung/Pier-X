@@ -74,7 +74,6 @@ import "./styles/tokens.css";
 import "./styles/atoms.css";
 import "./styles/shell.css";
 import "./styles/pier-x.css";
-import "./styles/db-panel.css";
 
 const TerminalPanel = lazy(() => import("./panels/TerminalPanel"));
 const HostsHealthPanel = lazy(() => import("./panels/HostsHealthPanel"));
