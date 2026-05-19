@@ -19,6 +19,7 @@ import {
 import NginxPanel from "./NginxPanel";
 import RawWebServerPanel from "./RawWebServerPanel";
 import { sudoKeyFor, useSudoStore } from "../stores/useSudoStore";
+import "../styles/web-server-panel.css";
 
 // One unified entry for nginx / apache / caddy. nginx routes to the
 // rich NginxPanel; apache and caddy land on a placeholder that exposes
