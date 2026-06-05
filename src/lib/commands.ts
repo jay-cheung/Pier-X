@@ -3311,7 +3311,84 @@ export function leadingSqlKeyword(sql: string): string | null {
   return match ? match[0].toUpperCase() : null;
 }
 
+/** True if `sql` contains more than one top-level statement — a `;`
+ *  followed by further non-comment, non-whitespace content — while
+ *  respecting string literals (', ", `) and comments (-- , block).
+ *  A lone trailing `;` is NOT multi-statement. */
+export function hasMultipleStatements(sql: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let inBacktick = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let sawSeparator = false;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    const n = sql[i + 1];
+    if (inLineComment) {
+      if (c === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && n === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (c === "'") inSingle = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === '"') inDouble = false;
+      continue;
+    }
+    if (inBacktick) {
+      if (c === "`") inBacktick = false;
+      continue;
+    }
+    if (c === "-" && n === "-") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && n === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === "`") {
+      inBacktick = true;
+      continue;
+    }
+    if (c === ";") {
+      sawSeparator = true;
+      continue;
+    }
+    // First meaningful (non-space, non-comment) char after a top-level
+    // `;` ⇒ there's a second statement.
+    if (sawSeparator && !/\s/.test(c)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isReadOnlySql(sql: string): boolean {
+  // A write hidden after a `;` (`SELECT 1; DROP TABLE x`) is
+  // multi-statement. The SQLite CLI executes EVERY statement, so the
+  // leading-keyword check alone let a write ride in behind a benign
+  // SELECT. Require a single statement, then check its leading keyword.
+  if (hasMultipleStatements(sql)) return false;
   const keyword = leadingSqlKeyword(sql);
   return keyword !== null && readOnlySqlKeywords.has(keyword);
 }

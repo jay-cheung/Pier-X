@@ -114,21 +114,39 @@ export function qualifyTable(
   return segs.join(".");
 }
 
-/** Quote a value for inline SQL. NULL passes through unquoted; numerics
- *  pass through if parseable; everything else is single-quote escaped. */
+/** Quote a value for inline SQL. NULL passes through unquoted; an
+ *  empty *numeric* cell is treated as NULL (you can't store `''` in
+ *  an int); numerics pass through if parseable; everything else is a
+ *  single-quote-escaped string literal.
+ *
+ *  `dialect` matters for backslash: MySQL treats `\` as a string
+ *  escape character (unless `NO_BACKSLASH_ESCAPES`), so a value
+ *  ending in `\` would otherwise escape the closing quote and corrupt
+ *  the statement (e.g. swallow a WHERE clause → wrong rows updated).
+ *  PG (`standard_conforming_strings`, the default) and SQLite treat
+ *  `\` literally, so doubling it there would corrupt the value —
+ *  hence the dialect branch. Pass the dialect from every call that
+ *  builds executable SQL. */
 export function escapeValue(
   value: string | null,
   numeric: boolean,
+  dialect?: DbDialect,
 ): string {
   if (value === null || value === undefined) return "NULL";
-  if (value === "") return "NULL";
   if (numeric) {
+    // An empty numeric cell means "no value" → NULL. (A genuine empty
+    // string only makes sense for text columns, handled below.)
+    if (value.trim() === "") return "NULL";
     const n = Number(value);
     if (Number.isFinite(n)) return value.trim();
     // Fall through to quoted — backend will reject if truly invalid,
     // which is more honest than silently coercing to 0.
   }
-  return `'${value.replace(/'/g, "''")}'`;
+  const escaped =
+    dialect === "mysql"
+      ? value.replace(/\\/g, "\\\\").replace(/'/g, "''")
+      : value.replace(/'/g, "''");
+  return `'${escaped}'`;
 }
 
 type BuildSqlArgs = {
@@ -145,11 +163,11 @@ export function buildUpdateSql(
   const colByName = new Map(args.columns.map((c) => [c.name, c]));
   const setClauses = Object.entries(changes).map(([col, val]) => {
     const meta = colByName.get(col);
-    return `${quoteIdent(args.dialect, col)} = ${escapeValue(val, meta?.numeric ?? false)}`;
+    return `${quoteIdent(args.dialect, col)} = ${escapeValue(val, meta?.numeric ?? false, args.dialect)}`;
   });
   const whereClauses = Object.entries(pk).map(([col, val]) => {
     const meta = colByName.get(col);
-    return `${quoteIdent(args.dialect, col)} = ${escapeValue(val, meta?.numeric ?? false)}`;
+    return `${quoteIdent(args.dialect, col)} = ${escapeValue(val, meta?.numeric ?? false, args.dialect)}`;
   });
   return `UPDATE ${args.table} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
 }
@@ -162,7 +180,7 @@ export function buildInsertSql(
   const cols = Object.keys(values);
   const colSql = cols.map((c) => quoteIdent(args.dialect, c)).join(", ");
   const valSql = cols
-    .map((c) => escapeValue(values[c], colByName.get(c)?.numeric ?? false))
+    .map((c) => escapeValue(values[c], colByName.get(c)?.numeric ?? false, args.dialect))
     .join(", ");
   return `INSERT INTO ${args.table} (${colSql}) VALUES (${valSql})`;
 }
@@ -174,7 +192,7 @@ export function buildDeleteSql(
   const colByName = new Map(args.columns.map((c) => [c.name, c]));
   const whereClauses = Object.entries(pk).map(([col, val]) => {
     const meta = colByName.get(col);
-    return `${quoteIdent(args.dialect, col)} = ${escapeValue(val, meta?.numeric ?? false)}`;
+    return `${quoteIdent(args.dialect, col)} = ${escapeValue(val, meta?.numeric ?? false, args.dialect)}`;
   });
   return `DELETE FROM ${args.table} WHERE ${whereClauses.join(" AND ")}`;
 }
@@ -208,7 +226,7 @@ export function buildAddColumnSql(
   const defaultClause =
     spec.defaultValue === undefined || spec.defaultValue === null
       ? ""
-      : ` DEFAULT ${escapeValue(spec.defaultValue, false)}`;
+      : ` DEFAULT ${escapeValue(spec.defaultValue, false, args.dialect)}`;
   return `ALTER TABLE ${args.table} ADD COLUMN ${colId} ${spec.type}${nullClause}${defaultClause}`;
 }
 
@@ -265,10 +283,10 @@ export function buildModifyColumnTypeSql(
   const defaultClause =
     spec.snapshot.defaultValue === undefined || spec.snapshot.defaultValue === null
       ? ""
-      : ` DEFAULT ${escapeValue(spec.snapshot.defaultValue, false)}`;
+      : ` DEFAULT ${escapeValue(spec.snapshot.defaultValue, false, args.dialect)}`;
   const commentClause =
     spec.snapshot.comment && spec.snapshot.comment !== ""
-      ? ` COMMENT ${escapeValue(spec.snapshot.comment, false)}`
+      ? ` COMMENT ${escapeValue(spec.snapshot.comment, false, args.dialect)}`
       : "";
   return `ALTER TABLE ${args.table} MODIFY COLUMN ${colId} ${spec.newType}${nullClause}${defaultClause}${commentClause}`;
 }
@@ -290,13 +308,13 @@ export function buildSetColumnCommentSql(
     throw new Error("SQLite columns have no native comment.");
   }
   if (args.dialect === "postgres") {
-    // Empty comment → IS NULL drops the comment cleanly. Non-empty
-    // is single-quote escaped via escapeValue (which routes empty
-    // strings to NULL too — so the branch matches PG semantics).
+    // Empty comment → IS NULL drops the comment cleanly. The empty
+    // case is handled here explicitly; escapeValue only sees non-empty
+    // text (it no longer maps "" → NULL).
     if (spec.comment === "") {
       return `COMMENT ON COLUMN ${args.table}.${colId} IS NULL`;
     }
-    return `COMMENT ON COLUMN ${args.table}.${colId} IS ${escapeValue(spec.comment, false)}`;
+    return `COMMENT ON COLUMN ${args.table}.${colId} IS ${escapeValue(spec.comment, false, args.dialect)}`;
   }
   // MySQL: same MODIFY COLUMN dance as buildModifyColumnTypeSql.
   // Empty comment = clear: emit `COMMENT ''`.
@@ -304,11 +322,11 @@ export function buildSetColumnCommentSql(
   const defaultClause =
     spec.snapshot.defaultValue === undefined || spec.snapshot.defaultValue === null
       ? ""
-      : ` DEFAULT ${escapeValue(spec.snapshot.defaultValue, false)}`;
+      : ` DEFAULT ${escapeValue(spec.snapshot.defaultValue, false, args.dialect)}`;
   const commentClause =
     spec.comment === ""
       ? " COMMENT ''"
-      : ` COMMENT ${escapeValue(spec.comment, false)}`;
+      : ` COMMENT ${escapeValue(spec.comment, false, args.dialect)}`;
   return `ALTER TABLE ${args.table} MODIFY COLUMN ${colId} ${spec.snapshot.type}${nullClause}${defaultClause}${commentClause}`;
 }
 

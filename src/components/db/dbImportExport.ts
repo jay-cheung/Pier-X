@@ -75,7 +75,7 @@ export async function exportTablesAsInserts(
     const colSql = r.columns.map((c) => quoteIdent(dialect, c)).join(", ");
     for (const row of slice) {
       const valSql = row
-        .map((cell) => (cell === null ? "NULL" : escapeNonNull(cell)))
+        .map((cell) => (cell === null ? "NULL" : escapeNonNull(cell, dialect)))
         .join(", ");
       chunks.push(`INSERT INTO ${tableRef} (${colSql}) VALUES (${valSql});\n`);
     }
@@ -177,13 +177,14 @@ export function splitSqlStatements(input: string): string[] {
   return out;
 }
 
-function escapeNonNull(value: string): string {
+function escapeNonNull(value: string, dialect: Dialect): string {
   // The cells already come back as strings from QueryExecutionResult.
   // Use `escapeValue` with `numeric: false` so a string-shaped cell
   // gets the single-quote treatment; numeric cells re-parse fine
   // through MySQL/PG/SQLite even when quoted, so we don't need to
-  // probe per-column types here.
-  return escapeValue(value, false);
+  // probe per-column types here. Pass the dialect so MySQL backslash
+  // escaping is applied (and not applied for PG/SQLite).
+  return escapeValue(value, false, dialect);
 }
 
 function qualify(
