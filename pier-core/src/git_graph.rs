@@ -126,6 +126,13 @@ pub fn graph_log(
     // Open repo with libgit2 only for ref decoration
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
+    // A freshly-init'd repo with no commits has an unborn HEAD; `git
+    // log` then exits non-zero. Return an empty graph so the History
+    // tab renders an empty state instead of an error banner.
+    if repo.is_empty().unwrap_or(false) {
+        return Ok(Vec::new());
+    }
+
     // Build git log command
     // Format: hash<SEP>parents<SEP>message<SEP>author<SEP>timestamp
     let separator = "\x1f"; // ASCII Unit Separator
@@ -402,8 +409,16 @@ pub fn list_authors(repo_path: &str, limit: usize) -> Result<Vec<String>, String
 pub fn list_tracked_files(repo_path: &str) -> Result<Vec<String>, String> {
     let repo = Repository::open(repo_path).map_err(|e| format!("Failed to open repo: {e}"))?;
 
+    // Empty repo / unborn HEAD: no tracked files yet.
+    if repo.is_empty().unwrap_or(false) {
+        return Ok(Vec::new());
+    }
+
     // Read the HEAD tree recursively
-    let head = repo.head().map_err(|e| format!("No HEAD: {e}"))?;
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(Vec::new()),
+    };
     let tree = head.peel_to_tree().map_err(|e| format!("No tree: {e}"))?;
 
     let mut files = Vec::new();
