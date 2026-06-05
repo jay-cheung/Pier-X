@@ -108,6 +108,7 @@ type Props = { tab: TabState };
 
 type TransferDirection = "up" | "dn";
 type TransferStatus = "active" | "done" | "failed";
+type BrowseOptions = { pushHistory?: boolean; syncTerminal?: boolean };
 type TransferItem = {
   id: string;
   direction: TransferDirection;
@@ -150,6 +151,16 @@ function joinLocalPath(dir: string, leaf: string): string {
   const trimmed = dir.trim().replace(/[\\/]+$/, "");
   const sep = /^[A-Za-z]:($|[\\/])|^\\\\/.test(trimmed) ? "\\" : "/";
   return `${trimmed}${sep}${leaf}`;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function normalizeSyncableRemotePath(path: string | null | undefined): string | null {
+  const trimmed = path?.trim();
+  if (!trimmed || !trimmed.startsWith("/")) return null;
+  return trimmed.replace(/\/+$/, "") || "/";
 }
 
 /** Parse an `ls -l` style permission string (e.g. `-rwxr-xr--`) back
@@ -255,14 +266,18 @@ function SftpPanelBody({ tab }: Props) {
   // first browse lands, this is set to whatever `current_path` came
   // back (already canonicalised), and every subsequent browse
   // carries an explicit path. We seed from the persisted
-  // `tab.sftpLastPath` so reopening the same tab rehydrates the
-  // user's last directory instead of resetting to $HOME each time.
-  const [path, setPath] = useState(tab.sftpLastPath ?? "");
+  // terminal cwd when it is an SFTP-style absolute path, then fall
+  // back to `tab.sftpLastPath` so opening SFTP after a terminal `cd`
+  // lands on the shell's current directory.
+  const terminalCwdPath = normalizeSyncableRemotePath(tab.lastCwd);
+  const initialBrowsePath = terminalCwdPath ?? tab.sftpLastPath ?? "";
+  const [path, setPath] = useState(initialBrowsePath);
   const [selectedPath, setSelectedPath] = useState("");
   const [editingPath, setEditingPath] = useState(false);
-  const [pathDraft, setPathDraft] = useState("");
+  const [pathDraft, setPathDraft] = useState(initialBrowsePath);
   const [history, setHistory] = useState<string[]>([]);
   const [forward, setForward] = useState<string[]>([]);
+  const terminalCwdBrowseAttemptRef = useRef<string | null>(terminalCwdPath);
 
   // Inline row rename. The previous implementation lived in a bottom
   // "inspector" strip; now the filename cell itself flips into an
@@ -491,7 +506,18 @@ function SftpPanelBody({ tab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canUseSsh, currentRemotePath, sshArgs.host, sshArgs.port, sshArgs.user, sshArgs.authMode]);
 
-  async function browse(targetPath = path, opts: { pushHistory?: boolean } = {}) {
+  async function syncTerminalToRemotePath(remotePath: string) {
+    const targetPath = normalizeSyncableRemotePath(remotePath);
+    const sessionId = tab.terminalSessionId;
+    if (!sessionId || !targetPath) return;
+    try {
+      await cmd.terminalWrite(sessionId, `cd ${shellSingleQuote(targetPath)}\r`);
+    } catch {
+      /* SFTP navigation already succeeded; terminal sync is best-effort. */
+    }
+  }
+
+  async function browse(targetPath = path, opts: BrowseOptions = {}) {
     if (!canUseSsh) {
       setError(sshRequired);
       return;
@@ -521,6 +547,9 @@ function SftpPanelBody({ tab }: Props) {
           sftpLastPath: next.currentPath,
         });
       }
+      if ((opts.syncTerminal ?? opts.pushHistory === true) && next.currentPath) {
+        void syncTerminalToRemotePath(next.currentPath);
+      }
     } catch (e) {
       // Keep the last successful listing on screen — wiping `state`
       // here would strand the user on a "Browse" empty view, break
@@ -545,7 +574,7 @@ function SftpPanelBody({ tab }: Props) {
     const prev = history[history.length - 1];
     setHistory((h) => h.slice(0, -1));
     setForward((f) => [...f, state.currentPath]);
-    await browse(prev);
+    await browse(prev, { syncTerminal: true });
   }
 
   async function goForward() {
@@ -553,7 +582,7 @@ function SftpPanelBody({ tab }: Props) {
     const next = forward[forward.length - 1];
     setForward((f) => f.slice(0, -1));
     setHistory((h) => [...h, state.currentPath]);
-    await browse(next);
+    await browse(next, { syncTerminal: true });
   }
 
   function openNewEntryDialog(kind: "file" | "dir") {
@@ -946,6 +975,24 @@ function SftpPanelBody({ tab }: Props) {
     sshTarget?.password,
     sshTarget?.savedConnectionIndex,
   ]);
+
+  useEffect(() => {
+    if (!canUseSsh) return;
+    if (busy) return;
+    const cwd = normalizeSyncableRemotePath(tab.lastCwd);
+    if (!cwd) return;
+    if (cwd === currentRemotePath) {
+      terminalCwdBrowseAttemptRef.current = cwd;
+      return;
+    }
+    if (terminalCwdBrowseAttemptRef.current === cwd) return;
+    terminalCwdBrowseAttemptRef.current = cwd;
+    void browse(cwd, {
+      pushHistory: Boolean(state?.currentPath),
+      syncTerminal: false,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.lastCwd, canUseSsh, busy, currentRemotePath, state?.currentPath]);
 
   function selectEntry(entry: SftpEntryView) {
     setSelectedPath(entry.path);
