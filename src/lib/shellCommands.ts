@@ -148,6 +148,13 @@ export const sshTunnelClose = (tunnelId: string) =>
 export const sshHostKeyDecide = (promptId: string, accept: boolean) =>
   invoke<void>("ssh_host_key_decide", { promptId, accept });
 
+/** Garbage-collect cached panel SSH sessions. `active` is the set of
+ *  `user@host:port` targets still referenced by open tabs; the backend
+ *  tears down any cached session not in the set. Called after a tab
+ *  closes so connections for hosts with no open tab don't leak. */
+export const sshSessionsRetain = (active: string[]) =>
+  invoke<void>("ssh_sessions_retain", { active });
+
 export const hostHealthProbe = (params: {
   indices: number[];
   timeoutMs: number;

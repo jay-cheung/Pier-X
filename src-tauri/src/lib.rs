@@ -64,6 +64,7 @@ use terminal_smart::{
 struct AppState {
     next_terminal_id: AtomicU64,
     next_tunnel_id: AtomicU64,
+    next_log_id: AtomicU64,
     terminals: Mutex<HashMap<String, ManagedTerminal>>,
     tunnels: Mutex<HashMap<String, ManagedTunnel>>,
     log_streams: Mutex<HashMap<String, ExecStream>>,
@@ -182,6 +183,7 @@ impl Default for AppState {
         Self {
             next_terminal_id: AtomicU64::new(1),
             next_tunnel_id: AtomicU64::new(1),
+            next_log_id: AtomicU64::new(1),
             terminals: Mutex::new(HashMap::new()),
             tunnels: Mutex::new(HashMap::new()),
             log_streams: Mutex::new(HashMap::new()),
@@ -318,8 +320,14 @@ const TERMINAL_SSH_PASSWORD_PROMPT_EVENT: &str = "terminal:ssh-password-prompt";
 /// belongs in `tab.sshKeyPassphrase`, not `tab.sshPassword` —
 /// crossing them costs the user a wrong auth attempt and surfaces
 /// as a confusing "auth rejected" error on the right side.
-#[allow(dead_code)]
 const TERMINAL_SSH_PASSPHRASE_PROMPT_EVENT: &str = "terminal:ssh-passphrase-prompt";
+
+/// Generic secret-entry prompt (sudo / passwd / su / login / 2FA)
+/// seen in the PTY output. Unlike the two prompts above this is
+/// suppress-only: the frontend uses it solely to keep the next typed
+/// line out of the command-history ring / persistence. No value is
+/// captured or routed, so the underlying detector can be broad.
+const TERMINAL_SECRET_PROMPT_EVENT: &str = "terminal:secret-prompt";
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1273,6 +1281,44 @@ extern "C" fn tauri_terminal_notify(user_data: *mut c_void, event: u32) {
         return;
     }
 
+    // Key-passphrase prompt — sibling of the password prompt above,
+    // routed to a separate event so the captured value lands in the
+    // passphrase slot. Previously fired by the reader but never
+    // translated here, so passphrase capture silently never worked
+    // (and the passphrase would fall through to history persistence).
+    if event == NotifyEvent::SshPassphrasePrompt as u32 {
+        #[derive(Serialize, Clone)]
+        #[serde(rename_all = "camelCase")]
+        struct PromptPayload<'a> {
+            session_id: &'a str,
+        }
+        let _ = ctx.app.emit(
+            TERMINAL_SSH_PASSPHRASE_PROMPT_EVENT,
+            PromptPayload {
+                session_id: &ctx.session_id,
+            },
+        );
+        return;
+    }
+
+    // Generic secret-entry prompt (sudo / passwd / su / 2FA). Suppress-
+    // only: the frontend keeps the next typed line out of history. No
+    // value is captured or routed anywhere.
+    if event == NotifyEvent::SecretPrompt as u32 {
+        #[derive(Serialize, Clone)]
+        #[serde(rename_all = "camelCase")]
+        struct PromptPayload<'a> {
+            session_id: &'a str,
+        }
+        let _ = ctx.app.emit(
+            TERMINAL_SECRET_PROMPT_EVENT,
+            PromptPayload {
+                session_id: &ctx.session_id,
+            },
+        );
+        return;
+    }
+
     // SSH-state transitions use a dedicated event + payload shape so
     // the frontend can update tab state without reparsing keystrokes.
     // Already debounced by the watcher (only fires on change), so no
@@ -1908,6 +1954,58 @@ fn evict_ssh_session(
     if let Ok(mut cache) = state.sftp_home_cache.lock() {
         cache.remove(&key);
     }
+}
+
+/// Evict cached SSH/SFTP resources for hosts that no longer have any
+/// open tab. The frontend passes `user@host:port` for every SSH
+/// target still referenced by an open tab (primary + nested) after a
+/// tab close; any cached `sftp_sessions` entry whose `user@host:port`
+/// suffix is absent is dropped, closing its TCP connection + FD.
+///
+/// Without this, the panel session cache (opened by SFTP / Monitor /
+/// Docker / Firewall) grew one live russh connection per host visited
+/// and only released them at process exit. Matching on the suffix
+/// (ignoring the `auth_mode:` prefix the cache key carries) means a
+/// still-open tab always retains its host even if the auth-mode label
+/// differs, so this can never evict a session a live tab is using —
+/// and if it ever did, the next command simply re-opens it.
+#[tauri::command]
+fn ssh_sessions_retain(state: tauri::State<'_, AppState>, active: Vec<String>) {
+    let keep: std::collections::HashSet<String> = active
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    // Key shape is `auth_mode:user@host:port`; the suffix after the
+    // first `:` is the addressing we match on.
+    let suffix_of = |key: &str| key.splitn(2, ':').nth(1).unwrap_or(key).to_string();
+    let to_evict: Vec<String> = match state.sftp_sessions.lock() {
+        Ok(cache) => cache
+            .keys()
+            .filter(|k| !keep.contains(&suffix_of(k)))
+            .cloned()
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    if to_evict.is_empty() {
+        return;
+    }
+    for key in &to_evict {
+        if let Ok(mut c) = state.sftp_sessions.lock() {
+            c.remove(key);
+        }
+        if let Ok(mut c) = state.sftp_clients.lock() {
+            c.remove(key);
+        }
+        if let Ok(mut c) = state.sftp_home_cache.lock() {
+            c.remove(key);
+        }
+    }
+    pier_core::logging::write_event(
+        "INFO",
+        "ssh.cache",
+        &format!("evicted {} idle cached session(s) on tab close", to_evict.len()),
+    );
 }
 
 /// Return the cached SFTP subsystem handle for this target, opening
@@ -3991,9 +4089,20 @@ fn egress_profile_delete(state: tauri::State<'_, AppState>, id: String) -> Resul
     store.save_default().map_err(|error| error.to_string())?;
 
     // Reap any VPN subprocess this profile owned. Drop is what
-    // actually does the kill; we just need to release the cache slot.
+    // actually does the teardown (SIGTERM / `wg-quick down`); we just
+    // need to release the cache slot.
     if let Ok(mut procs) = state.vpn_processes.lock() {
         procs.remove(&id);
+    }
+
+    // Tear down any DB forwarders this profile owned. Their cache key
+    // is `{egress_id}|{host}|{port}`, so anything prefixed with this
+    // id belongs to the profile being deleted. Dropping the Arc stops
+    // the loopback listener; otherwise it would leak (and a later
+    // profile reusing the same id would reuse a stale forwarder).
+    if let Ok(mut fwds) = state.egress_forwarders.lock() {
+        let prefix = format!("{id}|");
+        fwds.retain(|key, _| !key.starts_with(&prefix));
     }
 
     // Best-effort credential cleanup. Failure to delete the keyring
@@ -12635,6 +12744,17 @@ fn sftp_write_text(
     saved_connection_index: Option<usize>,
     sudo_password: Option<String>,
 ) -> Result<(), String> {
+    // Cap writes symmetrically with the 5 MB read cap (`SFTP_TEXT_READ_MAX`).
+    // The editor can't open anything larger than the read cap, so a
+    // larger write means an on-save transform / paste blew past it —
+    // refuse rather than stream a multi-MB whole-file overwrite.
+    let content_len = content.as_bytes().len() as u64;
+    if content_len > SFTP_TEXT_READ_MAX {
+        return Err(format!(
+            "Content is {} bytes; editor write limit is {} bytes",
+            content_len, SFTP_TEXT_READ_MAX
+        ));
+    }
     let session = get_or_open_ssh_session_with_sudo(
         &state,
         &host,
@@ -14097,12 +14217,13 @@ fn log_stream_start(
         },
     )?;
 
+    // Monotonic counter, not a millisecond timestamp: two starts in
+    // the same millisecond (a rapid stop→start on a log-source switch)
+    // produced the same key, so the second insert dropped the first
+    // stream and left the frontend with a dangling handle.
     let id = format!(
         "log-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
+        state.next_log_id.fetch_add(1, Ordering::Relaxed)
     );
 
     state
@@ -14945,6 +15066,7 @@ pub fn run() {
             terminal_set_scrollback_limit,
             terminal_current_cwd,
             terminal_close,
+            ssh_sessions_retain,
             terminal_validate_command,
             terminal_completions,
             terminal_completions_remote,
@@ -15156,6 +15278,28 @@ pub fn run() {
                 // dump path that might otherwise capture them.
                 if let Some(state) = app.try_state::<AppState>() {
                     state.ssh_cred_cache.clear();
+                    // Explicitly drain the long-lived resource caches so
+                    // their Drop impls run here, on the still-live tokio
+                    // context, rather than relying on AppState's own Drop
+                    // (which won't run on a non-graceful teardown). This
+                    // is what actually SIGTERMs VPN children / runs
+                    // `wg-quick down`, stops forwarder + log-stream
+                    // listeners, and reaps PTYs.
+                    if let Ok(mut m) = state.vpn_processes.lock() {
+                        m.clear();
+                    }
+                    if let Ok(mut m) = state.egress_forwarders.lock() {
+                        m.clear();
+                    }
+                    if let Ok(mut m) = state.tunnels.lock() {
+                        m.clear();
+                    }
+                    if let Ok(mut m) = state.log_streams.lock() {
+                        m.clear();
+                    }
+                    if let Ok(mut m) = state.terminals.lock() {
+                        m.clear();
+                    }
                 }
             }
         });

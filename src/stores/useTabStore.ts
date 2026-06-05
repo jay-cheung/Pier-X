@@ -228,6 +228,29 @@ function closeTabTunnels(tab: TabState | undefined) {
   closeTunnel(tab.pgTunnelId);
 }
 
+/** `user@host:port` strings for every SSH target still referenced by
+ *  an open tab — both the primary target and any nested `ssh` hop.
+ *  Fed to the backend so it can evict cached panel sessions for hosts
+ *  no tab uses anymore (closing their TCP connection + FD). */
+function openSshTargets(tabs: TabState[]): string[] {
+  const out = new Set<string>();
+  for (const t of tabs) {
+    const host = t.sshHost.trim();
+    if (host) out.add(`${t.sshUser.trim()}@${host}:${t.sshPort || 22}`);
+    const n = t.nestedSshTarget;
+    if (n && n.host.trim()) {
+      out.add(`${n.user.trim()}@${n.host.trim()}:${n.port || 22}`);
+    }
+  }
+  return [...out];
+}
+
+/** Call after a close path to garbage-collect cached panel SSH
+ *  sessions for hosts that no longer have an open tab. */
+function retainSshSessions(tabs: TabState[]) {
+  void cmd.sshSessionsRetain(openSshTargets(tabs)).catch(() => {});
+}
+
 function makeDefaultTab(
   partial: Partial<TabState> & { backend: TabState["backend"] },
 ): TabState {
@@ -329,6 +352,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
       return { tabs: next, activeTabId: nextActive };
     });
     savePersisted(get());
+    retainSshSessions(get().tabs);
   },
 
   closeOtherTabs: (id) => {
@@ -338,6 +362,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
       activeTabId: id,
     }));
     savePersisted(get());
+    retainSshSessions(get().tabs);
   },
 
   closeTabsToLeft: (id) => {
@@ -349,6 +374,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     const keepActive = next.some((t) => t.id === activeTabId);
     set({ tabs: next, activeTabId: keepActive ? activeTabId : id });
     savePersisted(get());
+    retainSshSessions(get().tabs);
   },
 
   closeTabsToRight: (id) => {
@@ -360,6 +386,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     const keepActive = next.some((t) => t.id === activeTabId);
     set({ tabs: next, activeTabId: keepActive ? activeTabId : id });
     savePersisted(get());
+    retainSshSessions(get().tabs);
   },
 
   setActiveTab: (id) => {

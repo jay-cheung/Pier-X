@@ -9,9 +9,12 @@
 //! that rides whatever route the system installed. Per-connection
 //! isolation is explicitly out of scope (see PRODUCT-SPEC §3.4).
 //!
-//! The subprocess is owned by [`VpnProcess`]. Drop the handle to
-//! send `SIGTERM` (Unix) / kill (Windows); the corresponding VPN
-//! client is responsible for tearing down its own routes on exit.
+//! The profile is owned by [`VpnProcess`]. Dropping the handle tears
+//! the tunnel down. Two shapes are handled: long-lived daemons
+//! (openvpn / openconnect) get a graceful `SIGTERM` (Unix) /
+//! `TerminateProcess` (Windows) so the client removes its own
+//! routes; `wg-quick` configures-and-exits, so its handle holds no
+//! child and Drop runs `wg-quick down <conf>` to remove the tun.
 //!
 //! # Privilege
 //!
@@ -31,15 +34,37 @@ use std::time::{Duration, Instant};
 
 use super::{EgressKind, ExternalVpnEngine};
 
-/// One running VPN subprocess. Held inside the application's
-/// lifetime cache (e.g. `AppState::vpn_processes`); when the entry
-/// is removed the `Drop` impl reaps the child.
+/// Explicit teardown command run on `Drop` for the oneshot model
+/// (`wg-quick down <conf>`). The daemon model (openvpn / openconnect)
+/// has no teardown plan — its cleanup is a `SIGTERM` to the child.
+#[derive(Debug, Clone)]
+struct TeardownPlan {
+    program: String,
+    args: Vec<String>,
+}
+
+/// One running VPN profile. Held inside the application's lifetime
+/// cache (e.g. `AppState::vpn_processes`); when the entry is removed
+/// the `Drop` impl tears the tunnel down.
+///
+/// Two lifecycle shapes share this type:
+/// - **daemon** (openvpn / openconnect): a long-lived `child`;
+///   `Drop` sends `SIGTERM` so the client removes its own tun/routes.
+/// - **oneshot** (wg-quick): `wg-quick up` configures the interface
+///   and exits 0, so there is no child to hold; `Drop` runs the
+///   `teardown` command (`wg-quick down`) to remove it.
 pub struct VpnProcess {
     /// Profile id this process backs.
     pub profile_id: String,
     /// Human-readable command line for diagnostics.
     pub command_line: String,
+    /// Long-lived child (daemon model). `None` for the oneshot model.
     child: Mutex<Option<Child>>,
+    /// Teardown command (oneshot model). `None` for the daemon model.
+    teardown: Option<TeardownPlan>,
+    /// For the oneshot model: the configure step succeeded and the
+    /// tunnel is considered up until `Drop` tears it down.
+    oneshot_active: bool,
 }
 
 impl std::fmt::Debug for VpnProcess {
@@ -51,15 +76,64 @@ impl std::fmt::Debug for VpnProcess {
     }
 }
 
+/// Reap a daemon child gracefully: `SIGTERM` first so the VPN client
+/// runs its own route/tun cleanup, escalating to `SIGKILL` only if it
+/// ignores the request within the grace window. On Windows there is
+/// no graceful signal, so `kill()` (TerminateProcess) is all we have.
+fn terminate_gracefully(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: `child.id()` is a live PID we own; `libc::kill`
+        // with SIGTERM is the standard graceful-stop request.
+        let pid = child.id() as libc::pid_t;
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                _ => break,
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 impl Drop for VpnProcess {
     fn drop(&mut self) {
+        // Daemon model: SIGTERM the child so it tears down its tun.
         if let Ok(mut guard) = self.child.lock() {
             if let Some(mut child) = guard.take() {
-                // Best effort: SIGTERM via kill, then reap. The VPN
-                // client should clean its own tun on a clean exit.
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_gracefully(&mut child);
             }
+        }
+        // Oneshot model: the `up` command already exited, so run the
+        // matching `down` command to remove the interface and routes.
+        // Without this the wg-quick tun would leak on the host — the
+        // exact "don't touch the host's routing" stance §3.4 promises.
+        if let Some(td) = &self.teardown {
+            log::info!(
+                "egress vpn teardown for profile '{}': {} {}",
+                self.profile_id,
+                td.program,
+                td.args.join(" ")
+            );
+            let _ = Command::new(&td.program)
+                .args(&td.args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
     }
 }
@@ -71,22 +145,40 @@ impl VpnProcess {
             .map_err(|_| io::Error::other("VpnProcess child lock poisoned"))
     }
 
-    /// True when the underlying child is still running. Calls
-    /// `try_wait`; on Windows that means the OS-level signal that
-    /// the process exited has been observed.
+    /// True when the tunnel is up. For the daemon model this means the
+    /// child is still running; for the oneshot model it means the
+    /// configure step succeeded (and `Drop` hasn't torn it down yet).
     pub fn is_running(&self) -> bool {
+        if self.oneshot_active {
+            return true;
+        }
         let Ok(mut guard) = self.lock_child() else { return false };
         let Some(child) = guard.as_mut() else { return false };
-        match child.try_wait() {
-            Ok(None) => true,
-            _ => false,
-        }
+        matches!(child.try_wait(), Ok(None))
     }
 }
 
 /// Resolve the EgressKind into the concrete spawn plan, or return
 /// `None` when the kind is not a subprocess VPN. Unknown engines
 /// surface as `io::Error` so the caller can present them.
+/// Reject a value that would be parsed as a command-line flag.
+/// Profile fields (conf paths, gateway hostnames) come from the
+/// persisted store / import, so a value starting with `-` could
+/// inject extra flags into the privileged VPN binary (e.g.
+/// openconnect's bare positional arg, or any `--script=` style
+/// option). A real path / hostname never starts with `-`.
+fn reject_flaglike(value: &str, field: &str) -> io::Result<()> {
+    if value.trim_start().starts_with('-') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{field} must not start with '-' (it would be parsed as a flag by the VPN binary): {value}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn plan_for(profile_id: &str, kind: &EgressKind) -> io::Result<Option<SpawnPlan>> {
     match kind {
         EgressKind::Wireguard { conf_path } => {
@@ -95,6 +187,7 @@ fn plan_for(profile_id: &str, kind: &EgressKind) -> io::Result<Option<SpawnPlan>
             let conf: PathBuf = if conf_path.trim().is_empty() {
                 config_path_for(profile_id, "conf")?
             } else {
+                reject_flaglike(conf_path, "wireguard conf_path")?;
                 PathBuf::from(conf_path.trim())
             };
             if !conf.exists() {
@@ -106,26 +199,41 @@ fn plan_for(profile_id: &str, kind: &EgressKind) -> io::Result<Option<SpawnPlan>
                     ),
                 ));
             }
+            let conf_str = conf.display().to_string();
             Ok(Some(SpawnPlan {
                 program: "wg-quick".to_string(),
-                args: vec!["up".to_string(), conf.display().to_string()],
+                args: vec!["up".to_string(), conf_str.clone()],
                 expect_tun_within: Duration::from_secs(10),
+                // `wg-quick up` configures the interface then exits 0 —
+                // it is NOT a long-lived daemon. Hold no child; tear
+                // down with `wg-quick down <conf>` on Drop.
+                lifecycle: Lifecycle::Oneshot {
+                    teardown: TeardownPlan {
+                        program: "wg-quick".to_string(),
+                        args: vec!["down".to_string(), conf_str],
+                    },
+                },
             }))
         }
-        EgressKind::ExternalVpn { engine, config } => match engine {
-            ExternalVpnEngine::OpenVpn => Ok(Some(SpawnPlan {
-                program: "openvpn".to_string(),
-                args: vec!["--config".to_string(), config.clone()],
-                expect_tun_within: Duration::from_secs(20),
-            })),
-            ExternalVpnEngine::OpenConnect => Ok(Some(SpawnPlan {
-                program: "openconnect".to_string(),
-                // OpenConnect treats the bare positional arg as the
-                // VPN gateway hostname (or `--config <file>`).
-                args: vec![config.clone()],
-                expect_tun_within: Duration::from_secs(30),
-            })),
-        },
+        EgressKind::ExternalVpn { engine, config } => {
+            reject_flaglike(config, "external vpn config")?;
+            match engine {
+                ExternalVpnEngine::OpenVpn => Ok(Some(SpawnPlan {
+                    program: "openvpn".to_string(),
+                    args: vec!["--config".to_string(), config.clone()],
+                    expect_tun_within: Duration::from_secs(20),
+                    lifecycle: Lifecycle::Daemon,
+                })),
+                ExternalVpnEngine::OpenConnect => Ok(Some(SpawnPlan {
+                    program: "openconnect".to_string(),
+                    // OpenConnect treats the bare positional arg as the
+                    // VPN gateway hostname (or `--config <file>`).
+                    args: vec![config.clone()],
+                    expect_tun_within: Duration::from_secs(30),
+                    lifecycle: Lifecycle::Daemon,
+                })),
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -143,11 +251,23 @@ fn config_path_for(profile_id: &str, ext: &str) -> io::Result<PathBuf> {
     Ok(p)
 }
 
+/// How the spawned process behaves over its lifetime.
+#[derive(Debug)]
+enum Lifecycle {
+    /// Long-lived client (openvpn / openconnect). Hold the child;
+    /// `SIGTERM` it on teardown.
+    Daemon,
+    /// Configure-and-exit command (wg-quick). The `up` runs to
+    /// completion; tear down with a separate command on Drop.
+    Oneshot { teardown: TeardownPlan },
+}
+
 #[derive(Debug)]
 struct SpawnPlan {
     program: String,
     args: Vec<String>,
     expect_tun_within: Duration,
+    lifecycle: Lifecycle,
 }
 
 /// Start the subprocess for `kind` if the kind is a VPN subprocess
@@ -163,42 +283,71 @@ pub fn spawn(profile_id: &str, kind: &EgressKind) -> io::Result<Option<VpnProces
     let Some(plan) = plan_for(profile_id, kind)? else {
         return Ok(None);
     };
-    let mut cmd = Command::new(&plan.program);
-    cmd.args(&plan.args);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::piped());
-    let child = cmd.spawn().map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!("spawn {} {}: {e}", plan.program, plan.args.join(" ")),
-        )
-    })?;
     let cmdline = format!("{} {}", plan.program, plan.args.join(" "));
-    log::info!(
-        "egress vpn subprocess started for profile '{profile_id}': {cmdline}"
-    );
-    let process = VpnProcess {
-        profile_id: profile_id.to_string(),
-        command_line: cmdline,
-        child: Mutex::new(Some(child)),
-    };
 
-    // Coarse wait: many VPN clients exit early (auth fail, missing
-    // privilege) inside the first second. Polling try_wait gives us
-    // a chance to surface that as an error rather than letting the
-    // first dial fail with a routing issue minutes later.
-    let deadline = Instant::now() + plan.expect_tun_within.min(Duration::from_secs(2));
-    while Instant::now() < deadline {
-        if !process.is_running() {
-            return Err(io::Error::other(format!(
-                "VPN subprocess exited during startup: {}",
-                process.command_line
-            )));
+    match plan.lifecycle {
+        Lifecycle::Oneshot { teardown } => {
+            // wg-quick up: run to completion. A non-zero exit (bad
+            // conf, missing privilege, kernel module absent) is a
+            // hard failure surfaced with the client's stderr; exit 0
+            // means the interface + routes are installed.
+            let output = Command::new(&plan.program)
+                .args(&plan.args)
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|e| io::Error::new(e.kind(), format!("spawn {cmdline}: {e}")))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(io::Error::other(format!(
+                    "{cmdline} failed ({}): {}",
+                    output.status,
+                    stderr.trim()
+                )));
+            }
+            log::info!("egress vpn configured for profile '{profile_id}': {cmdline}");
+            Ok(Some(VpnProcess {
+                profile_id: profile_id.to_string(),
+                command_line: cmdline,
+                child: Mutex::new(None),
+                teardown: Some(teardown),
+                oneshot_active: true,
+            }))
         }
-        std::thread::sleep(Duration::from_millis(200));
+        Lifecycle::Daemon => {
+            let mut cmd = Command::new(&plan.program);
+            cmd.args(&plan.args);
+            cmd.stdin(Stdio::null());
+            cmd.stdout(Stdio::null());
+            cmd.stderr(Stdio::piped());
+            let child = cmd.spawn().map_err(|e| {
+                io::Error::new(e.kind(), format!("spawn {cmdline}: {e}"))
+            })?;
+            log::info!("egress vpn subprocess started for profile '{profile_id}': {cmdline}");
+            let process = VpnProcess {
+                profile_id: profile_id.to_string(),
+                command_line: cmdline,
+                child: Mutex::new(Some(child)),
+                teardown: None,
+                oneshot_active: false,
+            };
+
+            // Coarse wait: many VPN clients exit early (auth fail,
+            // missing privilege) inside the first second. Polling
+            // try_wait surfaces that as an error rather than letting
+            // the first dial fail with a routing issue minutes later.
+            let deadline = Instant::now() + plan.expect_tun_within.min(Duration::from_secs(2));
+            while Instant::now() < deadline {
+                if !process.is_running() {
+                    return Err(io::Error::other(format!(
+                        "VPN subprocess exited during startup: {}",
+                        process.command_line
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Ok(Some(process))
+        }
     }
-    Ok(Some(process))
 }
 
 #[cfg(test)]
@@ -235,6 +384,25 @@ mod tests {
         let plan = plan_for("p", &kind).unwrap().expect("plan");
         assert_eq!(plan.program, "openconnect");
         assert_eq!(plan.args, vec!["vpn.corp.example.com".to_string()]);
+    }
+
+    #[test]
+    fn plan_for_rejects_flaglike_openconnect_config() {
+        let kind = EgressKind::ExternalVpn {
+            engine: ExternalVpnEngine::OpenConnect,
+            config: "--script=/tmp/evil".into(),
+        };
+        let err = plan_for("p", &kind).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn plan_for_rejects_flaglike_wireguard_conf_path() {
+        let kind = EgressKind::Wireguard {
+            conf_path: "-x/evil.conf".into(),
+        };
+        let err = plan_for("p", &kind).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
