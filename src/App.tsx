@@ -1,7 +1,7 @@
 // ── Pier-X Shell Orchestrator ────────────────────────────────────
 // Three-pane IDE layout: Sidebar | Center (TabBar + Content) | RightSidebar
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -109,6 +109,14 @@ const SIDEBAR_PATH_STORAGE_KEY = "pierx:sidebar-path";
 const TOOLSTRIP_W = 42;
 const DEFAULT_SIDEBAR_W = 244;
 const DEFAULT_RIGHT_W = 360 + TOOLSTRIP_W;
+
+/** Parse a CSS <time> token ("200ms" / "0.2s") to milliseconds. */
+function cssMs(value: string): number {
+  const s = value.trim();
+  if (s.endsWith("ms")) return parseFloat(s) || 0;
+  if (s.endsWith("s")) return (parseFloat(s) || 0) * 1000;
+  return 0;
+}
 
 function isMarkdownFile(name: string): boolean {
   return MARKDOWN_EXTENSIONS.test(name);
@@ -911,6 +919,35 @@ function App() {
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, [handleGlobalKeyDown]);
+
+  // Opening/closing the right panel animates --rightpanel-w over
+  // --dur-normal, sliding .rightzone (and reflowing .center) under a
+  // stationary cursor. A toolbar button that passes beneath the cursor
+  // mid-slide picks up :hover, and Chromium won't recompute it until the
+  // next pointer event — leaving a stuck gray box on the SFTP toolbar
+  // buttons. Mirror the resize guard (body.is-resizing): make the panes
+  // pointer-inert for the transition's duration via `is-panel-animating`,
+  // applied before paint so frame 0 of the slide is already inert.
+  // Resize itself changes rightWidth (not rightCollapsed) under
+  // is-resizing, so it never trips this effect. Skip the initial mount —
+  // there is no user-driven slide yet.
+  const rightPanelAnimMounted = useRef(false);
+  useLayoutEffect(() => {
+    if (!rightPanelAnimMounted.current) {
+      rightPanelAnimMounted.current = true;
+      return;
+    }
+    document.body.classList.add("is-panel-animating");
+    const dur =
+      cssMs(getComputedStyle(document.documentElement).getPropertyValue("--dur-normal")) || 200;
+    const id = window.setTimeout(() => {
+      document.body.classList.remove("is-panel-animating");
+    }, dur + 80);
+    return () => {
+      window.clearTimeout(id);
+      document.body.classList.remove("is-panel-animating");
+    };
+  }, [rightCollapsed]);
 
   const rightPanelW = rightCollapsed ? 0 : Math.max(rightWidth - TOOLSTRIP_W, 0);
   const isRightCollapsed = rightCollapsed || rightPanelW === 0;

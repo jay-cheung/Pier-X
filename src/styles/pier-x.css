@@ -68,6 +68,18 @@ body.is-resizing .center,
 body.is-resizing .rightzone {
   pointer-events: none;
 }
+/* Same stale-:hover trap, but driven by the open/close *transition*
+ * rather than a pointer drag: toggling the right panel animates
+ * --rightpanel-w over --dur-normal, sliding .rightzone (and reflowing
+ * .center, whose right-aligned terminal-header buttons move) beneath a
+ * stationary cursor. No drag happens, so `is-resizing` is never set —
+ * App.tsx instead toggles `is-panel-animating` for the transition's
+ * duration. Suppress pointer interaction on those panes meanwhile so no
+ * button keeps a stale hover/active background after the slide settles. */
+body.is-panel-animating .center,
+body.is-panel-animating .rightzone {
+  pointer-events: none;
+}
 /* No grid-template-columns override on .is-right-collapsed — the column
  * formula already reduces to `toolstrip-w` when --rightpanel-w hits 0,
  * and keeping the same template lets the width transition interpolate
