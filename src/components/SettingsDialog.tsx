@@ -1175,6 +1175,9 @@ type SecurityHostRow = {
   /** UI display name (saved-connection label, falls back to the
    *  raw `user@host`). */
   label: string;
+  /** Saved-connection display name on its own, or `""` when the host
+   *  has none — rendered as the row's primary line above the address. */
+  name: string;
   /** Stable identity tuple — used to drive the keychain lookup
    *  and to call `forgetElevationPassword`. */
   user: string;
@@ -1261,6 +1264,7 @@ function SecurityPanel() {
         label: c.name?.trim()
           ? `${c.name} — ${c.user}@${c.host}`
           : `${c.user}@${c.host}`,
+        name: c.name?.trim() ?? "",
         user: c.user,
         host: c.host,
         port: c.port,
@@ -1385,8 +1389,18 @@ function SecurityPanel() {
           {rows.map((row) => {
             const armed = row.inMemory || row.inKeychain === "yes";
             return (
-              <div className="privacy-storage-row" key={row.storeKey}>
-                <span className="privacy-storage-key mono">{row.label}</span>
+              <div
+                className="privacy-storage-row privacy-storage-row--host"
+                key={row.storeKey}
+              >
+                <span className="privacy-storage-key">
+                  {row.name ? (
+                    <span className="privacy-storage-host-name">{row.name}</span>
+                  ) : null}
+                  <span className="privacy-storage-host-addr">
+                    {`${row.user}@${row.host}`}
+                  </span>
+                </span>
                 <span
                   className="privacy-storage-val"
                   style={{

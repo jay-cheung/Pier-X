@@ -160,6 +160,36 @@
   flex: none;
 }
 
+/* Security → saved sudo passwords reuses the storage-row chrome, but
+ * its first cell is a long "name + user@host" host identity rather than
+ * a short key. Give the identity the flexible column and let status +
+ * action hug the right, so the address can't overflow the fixed 100px
+ * key track and collide with the status text. */
+.privacy-storage-row--host {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.privacy-storage-row--host .privacy-storage-key {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
+.privacy-storage-host-name {
+  font-size: var(--ui-fs-sm);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.privacy-storage-host-addr {
+  font-family: var(--mono);
+  font-size: var(--size-small);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Settings · Git config actions ──────────────────────────── */
 .git-config-actions {
   display: flex;
