@@ -1224,6 +1224,10 @@ struct TerminalSegment {
 #[serde(rename_all = "camelCase")]
 struct TerminalLine {
     segments: Vec<TerminalSegment>,
+    /// FNV-1a content hash as a decimal string (string, not a number, so
+    /// JSON's f64 doesn't drop the high bits of a u64). The frontend
+    /// memoizes a terminal row and only re-renders it when this changes.
+    hash: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -3001,6 +3005,32 @@ fn push_terminal_segment(
     *cells = 0;
 }
 
+/// FNV-1a hash over everything in a row that affects its rendered output
+/// (segment text, colors, attributes, cursor flag, cell widths). Lets the
+/// frontend skip re-rendering rows whose content is unchanged frame to
+/// frame. Returned as a decimal string so JSON numbers (f64) don't drop
+/// the high bits of the u64.
+fn hash_terminal_line(segments: &[TerminalSegment]) -> String {
+    fn mix(h: &mut u64, bytes: &[u8]) {
+        for &b in bytes {
+            *h ^= b as u64;
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for seg in segments {
+        mix(&mut h, seg.text.as_bytes());
+        mix(&mut h, seg.fg.as_bytes());
+        mix(&mut h, seg.bg.as_bytes());
+        mix(&mut h, &(seg.cells as u64).to_le_bytes());
+        mix(
+            &mut h,
+            &[seg.bold as u8, seg.underline as u8, seg.cursor as u8, 0xff],
+        );
+    }
+    h.to_string()
+}
+
 fn build_terminal_lines(
     snapshot: &pier_core::terminal::GridSnapshot,
     alive: bool,
@@ -3068,7 +3098,8 @@ fn build_terminal_lines(
                 );
             }
 
-            TerminalLine { segments }
+            let hash = hash_terminal_line(&segments);
+            TerminalLine { segments, hash }
         })
         .collect()
 }

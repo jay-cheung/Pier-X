@@ -3,7 +3,7 @@
 // interval), keyboard I/O, scrollback, and session lifecycle management.
 
 import { KeyRound, SquareTerminal } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import * as cmd from "../lib/commands";
 import { controlKeyMap } from "../lib/commands";
@@ -18,6 +18,7 @@ import {
 import TerminalSyntaxOverlay from "../components/TerminalSyntaxOverlay";
 import CompletionPopover from "../components/CompletionPopover";
 import ManPagePopover from "../components/ManPagePopover";
+import { TerminalRow, type TerminalRowEnv } from "../components/TerminalRow";
 import {
   terminalCompletions,
   terminalCompletionsRemote,
@@ -44,42 +45,6 @@ import { useUiActionsStore } from "../stores/useUiActionsStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
 import { logEvent } from "../lib/logger";
 import "../styles/terminal-panel.css";
-
-/**
- * Resolve a backend-emitted color tag against the user's selected terminal
- * theme palette.
- *
- * Backend tags (see `render_terminal_color` in `src-tauri/src/lib.rs`):
- * - `""` → default fg/bg (returns `undefined` to inherit from the
- *   parent `<div className="terminal-screen">` which is painted with
- *   `termTheme.fg` / `termTheme.bg`).
- * - `"ansi:N"` → N in 0..=15 maps directly to `termTheme.ansi[N]`.
- *   N in 16..=231 is the 6×6×6 color cube, N in 232..=255 is grayscale —
- *   both get calculated hex values (themes don't re-skin these).
- * - `"#rrggbb"` → truecolor from ANSI SGR 38/48;2;r;g;b — pass through.
- */
-function resolveTerminalColor(tag: string, ansi: string[]): string | undefined {
-  if (!tag) return undefined;
-  if (tag.startsWith("ansi:")) {
-    const n = Number.parseInt(tag.slice(5), 10);
-    if (!Number.isFinite(n)) return undefined;
-    if (n >= 0 && n < 16 && ansi[n]) return ansi[n];
-    if (n >= 16 && n <= 231) {
-      const value = n - 16;
-      const steps = [0, 95, 135, 175, 215, 255];
-      const r = steps[Math.floor(value / 36) % 6];
-      const g = steps[Math.floor(value / 6) % 6];
-      const b = steps[value % 6];
-      return `rgb(${r},${g},${b})`;
-    }
-    if (n >= 232 && n <= 255) {
-      const shade = 8 + (n - 232) * 10;
-      return `rgb(${shade},${shade},${shade})`;
-    }
-    return undefined;
-  }
-  return tag;
-}
 
 /** Payload shape for the backend's `terminal:ssh-state` event. Emitted
  *  whenever the SSH-child watcher sees the set of `ssh` clients in the
@@ -155,6 +120,19 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
   const [terminalSize, setTerminalSize] = useState<TerminalSize>({ cols: 120, rows: 26 });
   const setStatusTerminalSize = useStatusStore((s) => s.setTerminalSize);
   const [scrollbackOffset, setScrollbackOffset] = useState(0);
+  // Referentially-stable per-row environment for the memoized TerminalRow.
+  // Changes only on theme / cursor-setting / column-count changes, so a
+  // pushed snapshot re-renders only the rows whose content hash differs.
+  const rowEnv = useMemo<TerminalRowEnv>(
+    () => ({
+      cursorStyle,
+      cursorBlink,
+      ansi: termTheme.ansi,
+      fg: termTheme.fg,
+      cols: snapshot?.cols ?? 0,
+    }),
+    [cursorStyle, cursorBlink, termTheme, snapshot?.cols],
+  );
   const [visualBellActive, setVisualBellActive] = useState(false);
   const [selectingInTerminal, setSelectingInTerminal] = useState(false);
   // Brief gate after `isActive` flips on. While the panel was
@@ -2620,56 +2598,9 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
               color: termTheme.fg,
             }}
           >
-            {snapshot.lines.map((line, i) => {
-              const usedCols = line.segments.reduce((n, s) => n + s.cells, 0);
-              const padCols = Math.max(0, snapshot.cols - usedCols);
-              return (
-                <div className="terminal-row" key={`line-${i}`} style={{ color: termTheme.fg }}>
-                  {line.segments.map((seg, j) => {
-                    const isCursor = seg.cursor;
-                    // Cursor style: 0=block (default), 1=beam, 2=underline.
-                    // Blink lives on a ::before overlay (see shell.css) so
-                    // the animation fades only the cursor block, not the
-                    // glyph underneath.
-                    const baseCursorClass = isCursor
-                      ? cursorStyle === 1
-                        ? "terminal-segment terminal-segment--cursor-beam"
-                        : cursorStyle === 2
-                          ? "terminal-segment terminal-segment--cursor-underline"
-                          : "terminal-segment terminal-segment--cursor"
-                      : "terminal-segment";
-                    const cursorClass = isCursor && cursorBlink
-                      ? `${baseCursorClass} terminal-segment--cursor-blink`
-                      : baseCursorClass;
-                    const segBg = isCursor
-                      ? undefined
-                      : resolveTerminalColor(seg.bg, termTheme.ansi);
-                    const segFg = isCursor
-                      ? undefined
-                      : resolveTerminalColor(seg.fg, termTheme.ansi);
-                    return (
-                      <span
-                        className={cursorClass}
-                        key={`seg-${i}-${j}`}
-                        style={{
-                          backgroundColor: segBg,
-                          color: segFg,
-                          fontWeight: seg.bold ? 510 : 400,
-                          textDecoration: seg.underline ? "underline" : "none",
-                        }}
-                      >
-                        {seg.text}
-                      </span>
-                    );
-                  })}
-                  {padCols > 0 && (
-                    <span className="terminal-segment terminal-segment--filler" aria-hidden>
-                      {" ".repeat(padCols)}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+            {snapshot.lines.map((line, i) => (
+              <TerminalRow key={`line-${i}`} line={line} env={rowEnv} />
+            ))}
             {smartActive &&
               snapshot.promptEnd &&
               (smartLineBufferText || suggestionSuffix) && (

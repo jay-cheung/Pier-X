@@ -1006,6 +1006,9 @@ export type TerminalSegment = {
 
 export type TerminalLine = {
   segments: TerminalSegment[];
+  /** FNV-1a content hash (decimal string) used to memoize unchanged
+   *  terminal rows so only changed rows re-render. */
+  hash: string;
 };
 
 export type TerminalSnapshot = {
