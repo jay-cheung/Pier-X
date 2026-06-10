@@ -2341,7 +2341,7 @@ export default function SettingsDialog({
                 </SettingRow>
                 <SettingRow
                   label={t("Persist autosuggest history")}
-                  description={t("Save the autosuggest history to ~/.local/share/pier-x/terminal-history-<shell>.jsonl so it survives app restarts. Lines that look like they hold a token / password are filtered out before disk write; the in-memory ring still has them for the current session.")}
+                  description={t("Save the autosuggest history to terminal-history-<shell>.jsonl in the Pier-X data directory so it survives app restarts. Lines that look like they hold a token / password are filtered out before disk write; the in-memory ring still has them for the current session.")}
                 >
                   <Toggle
                     checked={settings.terminalHistoryPersist}

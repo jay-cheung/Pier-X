@@ -32,7 +32,7 @@ header on merge and drop rows once they're confirmed shipped.
 | `feat/mysql-schema-enrichment`, `feat/pg-schema-enrichment` | Views/routines + table-meta tooltip in schema tree |
 | `feat/sql-explain-format` | EXPLAIN + Format SQL buttons across MySQL/PG/SQLite |
 | `feat/result-grid-json-pretty` | Result grid: JSONB / array pretty-print on hover |
-| `feat/terminal-history-persistence` | Smart Mode terminal: per-shell history persisted to `~/.pier-x/terminal-history-<shell>.jsonl` |
+| `feat/terminal-history-persistence` | Smart Mode terminal: per-shell history persisted to `terminal-history-<shell>.jsonl` under the app data dir (`pier-core::paths::data_dir()`) |
 | `feat/web-server-unify` | Web Server panel consolidates nginx/Apache/Caddy under one `rightTool: "webserver"`. Detection (`web_server_detect`), generic validate/reload (`web_server_validate`/`_reload`), shared layout/read/save pipeline (`web_server_layout`/`_read_file`/`_save_file`), Apache site toggle (`web_server_toggle_site`), new-site wizard (`web_server_create_site`), Caddy parser/renderer (`caddy_parse`/`_render`, 5 tests), Apache parser/renderer (`apache_parse`/`_render`, 7 tests). Apache catalog 9 features, Caddy catalog 9 features. |
 
 ## MySQL panel

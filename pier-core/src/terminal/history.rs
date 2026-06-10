@@ -31,7 +31,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -122,14 +122,48 @@ fn shell_slug(shell: &str) -> String {
 /// platforms where `directories` can't determine a sensible
 /// location (rare — usually just headless CI).
 pub fn path_for(shell: &str) -> Result<PathBuf, HistoryError> {
-    // PRODUCT-SPEC §4.2.1 specifies `~/.pier-x/terminal-history-<shell>.jsonl`
-    // so a user who reads the spec can find (and delete) the file. The
-    // previous `directories::ProjectDirs` data_dir() put it under the
-    // platform app-data dir, where the documented `rm` would miss it.
-    let base = directories::BaseDirs::new().ok_or(HistoryError::NoDataDir)?;
-    let dir = base.home_dir().join(".pier-x");
+    // Lives in the app data dir next to connections.json (PRODUCT-SPEC
+    // §4.2.1). A home-level dotdir would be unreachable under the Mac
+    // App Store sandbox, and Settings → Clear is the supported way to
+    // delete history anyway.
+    let dir = crate::paths::data_dir().ok_or(HistoryError::NoDataDir)?;
     fs::create_dir_all(&dir)?;
-    Ok(dir.join(format!("terminal-history-{}.jsonl", shell_slug(shell))))
+    let path = dir.join(history_file_name(shell));
+    migrate_legacy_file(&path, shell);
+    Ok(path)
+}
+
+/// `terminal-history-<shell>.jsonl` — shared with the legacy migration
+/// so the two locations can never drift apart.
+fn history_file_name(shell: &str) -> String {
+    format!("terminal-history-{}.jsonl", shell_slug(shell))
+}
+
+/// Earlier builds wrote history to `~/.pier-x/`. Move a leftover file
+/// into the data dir the first time the new path resolves so an
+/// opted-in user keeps their ring across the upgrade. Best-effort: a
+/// failed move just means autosuggest starts cold — never an error.
+fn migrate_legacy_file(target: &Path, shell: &str) {
+    if target.exists() {
+        return;
+    }
+    let Some(base) = directories::BaseDirs::new() else {
+        return;
+    };
+    let legacy_dir = base.home_dir().join(".pier-x");
+    let legacy = legacy_dir.join(history_file_name(shell));
+    if !legacy.exists() {
+        return;
+    }
+    if fs::rename(&legacy, target).is_err() {
+        // Rename fails across filesystems; fall back to copy + delete.
+        if fs::copy(&legacy, target).is_ok() {
+            let _ = fs::remove_file(&legacy);
+        }
+    }
+    // Succeeds only once the dotdir is empty — stops stranding an
+    // artifact of the old layout in every home directory.
+    let _ = fs::remove_dir(&legacy_dir);
 }
 
 /// Load the entries for `shell`, sorted most-recent first, and
@@ -303,6 +337,21 @@ mod tests {
         assert!(!path_for(&slug).unwrap().exists());
         // Idempotent — clearing a non-existent file is fine.
         clear(&slug).unwrap();
+    }
+
+    #[test]
+    fn legacy_home_dotdir_file_is_migrated() {
+        let slug = unique_slug("migrate");
+        cleanup(&slug);
+        let base = directories::BaseDirs::new().unwrap();
+        let legacy_dir = base.home_dir().join(".pier-x");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy = legacy_dir.join(history_file_name(&slug));
+        fs::write(&legacy, "{\"ts\":1,\"cmd\":\"ls\"}\n").unwrap();
+        let loaded = load(&slug).unwrap();
+        assert_eq!(loaded, vec!["ls".to_string()]);
+        assert!(!legacy.exists(), "legacy file should be moved, not copied");
+        cleanup(&slug);
     }
 
     #[test]
