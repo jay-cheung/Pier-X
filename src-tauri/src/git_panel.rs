@@ -727,7 +727,7 @@ fn map_git_panel_file(change: pier_core::services::git::GitFileChange) -> GitPan
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_init_repo(path: Option<String>) -> Result<String, String> {
     let repo_path = resolve_existing_path(path);
     run_git_at(&repo_path, &["init"])
@@ -835,7 +835,7 @@ pub struct GitGlobalConfig {
     pub sign_tags: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_global_config_get() -> Result<GitGlobalConfig, String> {
     Ok(GitGlobalConfig {
         user_name: git_global_get("user.name"),
@@ -848,7 +848,7 @@ pub fn git_global_config_get() -> Result<GitGlobalConfig, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_global_config_set(config: GitGlobalConfig) -> Result<(), String> {
     git_global_set("user.name", config.user_name.trim())?;
     git_global_set("user.email", config.user_email.trim())?;
@@ -860,7 +860,7 @@ pub fn git_global_config_set(config: GitGlobalConfig) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_panel_state(path: Option<String>) -> Result<GitPanelState, String> {
     let client = open_git_client(path)?;
     let branch = client.branch_info().map_err(|error| error.to_string())?;
@@ -897,7 +897,7 @@ pub fn git_panel_state(path: Option<String>) -> Result<GitPanelState, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_commit_and_push(
     path: Option<String>,
     message: String,
@@ -925,7 +925,7 @@ pub fn git_commit_and_push(
     run_git_at(&repo_path, &["push"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_graph_metadata(path: Option<String>) -> Result<GitGraphMetadata, String> {
     let client = open_git_client(path.clone())?;
     let repo_path = client.repo_path().display().to_string();
@@ -1092,7 +1092,7 @@ fn git_graph_history_blocking(params: GitGraphHistoryParams) -> Result<Vec<GitGr
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_commit_detail(
     path: Option<String>,
     hash: String,
@@ -1127,7 +1127,7 @@ pub fn git_commit_detail(
     Ok(parse_commit_detail(&meta, &stats, &numstat, &parents))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_commit_file_diff(
     path: Option<String>,
     hash: String,
@@ -1155,7 +1155,7 @@ pub fn git_commit_file_diff(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_comparison_files(
     path: Option<String>,
     hash: String,
@@ -1189,7 +1189,7 @@ pub fn git_comparison_files(
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_comparison_diff(
     path: Option<String>,
     hash: String,
@@ -1221,7 +1221,7 @@ pub(crate) fn reject_flaglike_ref(value: &str, label: &str) -> Result<(), String
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_checkout_target(
     path: Option<String>,
     target: String,
@@ -1247,12 +1247,12 @@ pub fn git_checkout_target(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_create_branch(path: Option<String>, name: String) -> Result<String, String> {
     git_create_branch_at(path, name, None)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_create_branch_at(
     path: Option<String>,
     name: String,
@@ -1273,7 +1273,7 @@ pub fn git_create_branch_at(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_delete_branch(path: Option<String>, name: String) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let branch_name = name.trim();
@@ -1283,7 +1283,7 @@ pub fn git_delete_branch(path: Option<String>, name: String) -> Result<String, S
     run_git_at(&repo_path, &["branch", "-D", branch_name])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_rename_branch(
     path: Option<String>,
     old_name: String,
@@ -1298,7 +1298,7 @@ pub fn git_rename_branch(
     run_git_at(&repo_path, &["branch", "-m", from, to])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_rename_remote_branch(
     path: Option<String>,
     remote_name: String,
@@ -1318,7 +1318,7 @@ pub fn git_rename_remote_branch(
     run_git_at(&repo_path, &["push", remote, "--delete", from])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_delete_remote_branch(
     path: Option<String>,
     remote_name: String,
@@ -1335,7 +1335,7 @@ pub fn git_delete_remote_branch(
     run_git_at(&repo_path, &["push", remote, "--delete", branch])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_merge_branch(path: Option<String>, name: String) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let branch_name = name.trim();
@@ -1346,7 +1346,7 @@ pub fn git_merge_branch(path: Option<String>, name: String) -> Result<String, St
     run_git_at(&repo_path, &["merge", branch_name])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_set_branch_tracking(
     path: Option<String>,
     branch_name: String,
@@ -1368,7 +1368,7 @@ pub fn git_set_branch_tracking(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_unset_branch_tracking(
     path: Option<String>,
     branch_name: String,
@@ -1381,7 +1381,7 @@ pub fn git_unset_branch_tracking(
     run_git_at(&repo_path, &["branch", "--unset-upstream", branch])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_blame_file(
     path: Option<String>,
     file_path: String,
@@ -1408,7 +1408,7 @@ pub fn git_blame_file(
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_tags_list(path: Option<String>) -> Result<Vec<GitTagView>, String> {
     let client = open_git_client(path)?;
     client
@@ -1426,7 +1426,7 @@ pub fn git_tags_list(path: Option<String>) -> Result<Vec<GitTagView>, String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_create_tag(
     path: Option<String>,
     name: String,
@@ -1435,7 +1435,7 @@ pub fn git_create_tag(
     git_create_tag_at(path, name, None, message)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_create_tag_at(
     path: Option<String>,
     name: String,
@@ -1469,7 +1469,7 @@ pub fn git_create_tag_at(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_delete_tag(path: Option<String>, name: String) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
@@ -1477,7 +1477,7 @@ pub fn git_delete_tag(path: Option<String>, name: String) -> Result<String, Stri
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_push_tag(path: Option<String>, name: String) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let tag_name = name.trim();
@@ -1513,13 +1513,13 @@ fn default_push_remote(repo_path: &Path) -> Option<String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_push_all_tags(path: Option<String>) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     run_git_at(&repo_path, &["push", "--tags"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_remotes_list(path: Option<String>) -> Result<Vec<GitRemoteView>, String> {
     let client = open_git_client(path)?;
     client
@@ -1537,7 +1537,7 @@ pub fn git_remotes_list(path: Option<String>) -> Result<Vec<GitRemoteView>, Stri
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_add_remote(path: Option<String>, name: String, url: String) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
@@ -1545,7 +1545,7 @@ pub fn git_add_remote(path: Option<String>, name: String, url: String) -> Result
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_set_remote_url(
     path: Option<String>,
     name: String,
@@ -1565,7 +1565,7 @@ pub fn git_set_remote_url(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_remove_remote(path: Option<String>, name: String) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
@@ -1573,7 +1573,7 @@ pub fn git_remove_remote(path: Option<String>, name: String) -> Result<String, S
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_fetch_remote(path: Option<String>, name: Option<String>) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     let remote_name = name.unwrap_or_default();
@@ -1594,7 +1594,7 @@ pub fn git_fetch_remote(path: Option<String>, name: Option<String>) -> Result<St
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_config_list(path: Option<String>) -> Result<Vec<GitConfigEntryView>, String> {
     let client = open_git_client(path)?;
     client
@@ -1612,7 +1612,7 @@ pub fn git_config_list(path: Option<String>) -> Result<Vec<GitConfigEntryView>, 
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_set_config_value(
     path: Option<String>,
     key: String,
@@ -1625,7 +1625,7 @@ pub fn git_set_config_value(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_unset_config_value(
     path: Option<String>,
     key: String,
@@ -1637,7 +1637,7 @@ pub fn git_unset_config_value(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_reset_to_commit(
     path: Option<String>,
     hash: String,
@@ -1660,7 +1660,7 @@ pub fn git_reset_to_commit(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_amend_head_commit_message(
     path: Option<String>,
     hash: String,
@@ -1686,7 +1686,7 @@ pub fn git_amend_head_commit_message(
 /// message. Caller is responsible for ensuring the working tree is
 /// clean and that the commit really is local-only (rewriting pushed
 /// history is destructive).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_reword_unpushed_commit(
     path: Option<String>,
     hash: String,
@@ -1793,7 +1793,7 @@ pub fn git_reword_unpushed_commit(
     Ok(outcome)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_revert_commit(
     path: Option<String>,
     hash: String,
@@ -1817,7 +1817,7 @@ pub fn git_revert_commit(
     run_git_at(&repo_path, &args)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_cherry_pick_commit(
     path: Option<String>,
     hash: String,
@@ -1846,7 +1846,7 @@ pub struct GitReflogEntry {
     pub relative_date: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_reflog_list(
     path: Option<String>,
     limit: Option<usize>,
@@ -1888,7 +1888,7 @@ pub fn git_reflog_list(
     Ok(entries)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_drop_commit(
     path: Option<String>,
     hash: String,
@@ -1917,7 +1917,7 @@ pub fn git_drop_commit(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_rebase_plan(
     path: Option<String>,
     count: Option<usize>,
@@ -1979,7 +1979,7 @@ pub fn git_rebase_plan(
     Ok(GitRebasePlanView { in_progress, items })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_execute_rebase(
     path: Option<String>,
     items: Vec<GitRebaseItemView>,
@@ -2033,19 +2033,19 @@ pub fn git_execute_rebase(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_abort_rebase(path: Option<String>) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     run_git_at(&repo_path, &["rebase", "--abort"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_continue_rebase(path: Option<String>) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     run_git_at(&repo_path, &["rebase", "--continue"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_submodules_list(path: Option<String>) -> Result<Vec<GitSubmoduleView>, String> {
     let repo_path = repo_root(path)?;
     let urls_by_path = parse_gitmodules_urls(&repo_path);
@@ -2082,13 +2082,13 @@ pub fn git_submodules_list(path: Option<String>) -> Result<Vec<GitSubmoduleView>
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_init_submodules(path: Option<String>) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     run_git_at(&repo_path, &["submodule", "init"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_update_submodules(
     path: Option<String>,
     recursive: Option<bool>,
@@ -2104,13 +2104,13 @@ pub fn git_update_submodules(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_sync_submodules(path: Option<String>) -> Result<String, String> {
     let repo_path = repo_root(path)?;
     run_git_at(&repo_path, &["submodule", "sync", "--recursive"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_conflicts_list(path: Option<String>) -> Result<Vec<GitConflictFileView>, String> {
     let repo_path = repo_root(path)?;
     let output = run_git_at(&repo_path, &["diff", "--name-only", "--diff-filter=U"])?;
@@ -2145,7 +2145,7 @@ pub fn git_conflicts_list(path: Option<String>) -> Result<Vec<GitConflictFileVie
     Ok(files)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_conflict_accept_all(
     path: Option<String>,
     file_path: String,
@@ -2174,7 +2174,7 @@ pub fn git_conflict_accept_all(
     Ok(format!("Accepted {} for {}", resolved, relative_path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_conflict_mark_resolved(params: GitConflictMarkResolvedParams) -> Result<String, String> {
     let repo_path = repo_root(params.path)?;
     let relative_path = params.file_path.trim();

@@ -3418,7 +3418,7 @@ fn core_components_info() -> Vec<ComponentInfo> {
     ]
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
     let target = resolve_existing_path(path);
 
@@ -3500,7 +3500,7 @@ fn list_directory(path: Option<String>) -> Result<Vec<FileEntry>, String> {
 ///
 /// On other platforms this yields `/` so the frontend can reuse the
 /// same rendering path without special-casing.
-#[tauri::command]
+#[tauri::command(async)]
 fn list_drives() -> Vec<FileEntry> {
     let mut drives: Vec<FileEntry> = Vec::new();
     #[cfg(windows)]
@@ -3553,7 +3553,7 @@ fn list_drives() -> Vec<FileEntry> {
 // frontend side are responsible for displaying errors via the
 // localized error bar, same pattern as SFTP.
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_create_file(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if p.exists() {
@@ -3567,7 +3567,7 @@ fn local_create_file(path: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to create {}: {}", p.display(), e))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_create_dir(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if p.exists() {
@@ -3576,7 +3576,7 @@ fn local_create_dir(path: String) -> Result<(), String> {
     std::fs::create_dir(&p).map_err(|e| format!("Failed to create {}: {}", p.display(), e))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_rename(from: String, to: String) -> Result<(), String> {
     let src = std::path::PathBuf::from(&from);
     let dst = std::path::PathBuf::from(&to);
@@ -3589,7 +3589,7 @@ fn local_rename(from: String, to: String) -> Result<(), String> {
     std::fs::rename(&src, &dst).map_err(|e| format!("Failed to rename: {}", e))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_remove(path: String, is_dir: bool) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if is_dir {
@@ -3601,7 +3601,7 @@ fn local_remove(path: String, is_dir: bool) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_overview(path: Option<String>) -> Result<GitOverview, String> {
     let client = open_git_client(path)?;
     let branch = client.branch_info().map_err(|error| error.to_string())?;
@@ -3632,7 +3632,7 @@ fn git_overview(path: Option<String>) -> Result<GitOverview, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_diff(
     path: Option<String>,
     file_path: String,
@@ -3651,37 +3651,37 @@ fn git_diff(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stage_paths(path: Option<String>, paths: Vec<String>) -> Result<(), String> {
     let client = open_git_client(path)?;
     client.stage(&paths).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_unstage_paths(path: Option<String>, paths: Vec<String>) -> Result<(), String> {
     let client = open_git_client(path)?;
     client.unstage(&paths).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stage_all(path: Option<String>) -> Result<(), String> {
     let client = open_git_client(path)?;
     client.stage_all().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_unstage_all(path: Option<String>) -> Result<(), String> {
     let client = open_git_client(path)?;
     client.unstage_all().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_discard_paths(path: Option<String>, paths: Vec<String>) -> Result<(), String> {
     let client = open_git_client(path)?;
     client.discard(&paths).map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_commit(
     path: Option<String>,
     message: String,
@@ -3700,13 +3700,13 @@ fn git_commit(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_branch_list(path: Option<String>) -> Result<Vec<String>, String> {
     let client = open_git_client(path)?;
     client.branch_list().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_checkout_branch(path: Option<String>, name: String) -> Result<String, String> {
     let name = name.trim();
     reject_flaglike_ref(name, "branch name")?;
@@ -3716,7 +3716,7 @@ fn git_checkout_branch(path: Option<String>, name: String) -> Result<String, Str
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_recent_commits(
     path: Option<String>,
     limit: Option<usize>,
@@ -3749,19 +3749,19 @@ fn map_commit_entry(entry: CommitInfo) -> GitCommitEntry {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_push(path: Option<String>) -> Result<String, String> {
     let client = open_git_client(path)?;
     client.push().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_pull(path: Option<String>) -> Result<String, String> {
     let client = open_git_client(path)?;
     client.pull().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stash_list(path: Option<String>) -> Result<Vec<GitStashEntry>, String> {
     let client = open_git_client(path)?;
     client
@@ -3770,7 +3770,7 @@ fn git_stash_list(path: Option<String>) -> Result<Vec<GitStashEntry>, String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stash_push(path: Option<String>, message: String) -> Result<String, String> {
     let client = open_git_client(path)?;
     client
@@ -3778,7 +3778,7 @@ fn git_stash_push(path: Option<String>, message: String) -> Result<String, Strin
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stash_apply(path: Option<String>, index: String) -> Result<String, String> {
     let index = index.trim();
     reject_flaglike_ref(index, "stash index")?;
@@ -3788,7 +3788,7 @@ fn git_stash_apply(path: Option<String>, index: String) -> Result<String, String
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stash_pop(path: Option<String>, index: String) -> Result<String, String> {
     let index = index.trim();
     reject_flaglike_ref(index, "stash index")?;
@@ -3798,7 +3798,7 @@ fn git_stash_pop(path: Option<String>, index: String) -> Result<String, String> 
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stash_drop(path: Option<String>, index: String) -> Result<String, String> {
     let index = index.trim();
     reject_flaglike_ref(index, "stash index")?;
@@ -3808,7 +3808,7 @@ fn git_stash_drop(path: Option<String>, index: String) -> Result<String, String>
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_stash_reword(
     path: Option<String>,
     index: String,
@@ -3822,7 +3822,7 @@ fn git_stash_reword(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn git_unpushed_commits(path: Option<String>) -> Result<Vec<UnpushedCommit>, String> {
     let client = open_git_client(path)?;
     client
@@ -4388,7 +4388,7 @@ fn egress_profile_delete(state: tauri::State<'_, AppState>, id: String) -> Resul
 /// This typically prompts for admin (sudo / UAC) the first time
 /// the binary tries to install its tun. Subsequent calls within
 /// the same Pier-X session reuse the cached `VpnProcess` handle.
-#[tauri::command]
+#[tauri::command(async)]
 fn egress_vpn_start(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     let store = ConnectionStore::load_default().map_err(|e| e.to_string())?;
     let profile = store
@@ -4417,7 +4417,7 @@ fn egress_vpn_start(state: tauri::State<'_, AppState>, id: String) -> Result<(),
 /// Stop the VPN subprocess associated with a profile. No-op when
 /// nothing is running. The corresponding VPN client is responsible
 /// for cleaning its own routes / tun on receipt of SIGTERM.
-#[tauri::command]
+#[tauri::command(async)]
 fn egress_vpn_stop(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     if let Ok(mut procs) = state.vpn_processes.lock() {
         procs.remove(&id);
@@ -4450,7 +4450,7 @@ struct EgressProbeResult {
 /// Pass an explicit target to test reachability of the actual
 /// host you care about (the DB / SSH server you're about to
 /// connect to). Probe is hard-capped at 5 seconds.
-#[tauri::command]
+#[tauri::command(async)]
 fn egress_profile_test(
     id: Option<String>,
     target_host: Option<String>,
@@ -4632,7 +4632,7 @@ fn egress_credential_ids(kind: &EgressKind) -> Vec<String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn ssh_tunnel_open(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -4843,7 +4843,7 @@ fn host_key_verifier() -> HostKeyVerifier {
 /// per query; `run_with_session_retry` evicts + retries once
 /// when the cached session went stale.
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
+#[tauri::command(async)]
 fn code_search(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -4933,7 +4933,7 @@ fn ssh_host_key_decide(prompt_id: String, accept: bool) -> Result<(), String> {
 /// Fire-and-forget: returns immediately. Errors during the async
 /// handshake are logged and dropped — this is pure optimization, a
 /// miss just means the panel pays the cost the old way.
-#[tauri::command]
+#[tauri::command(async)]
 fn ssh_session_prewarm(
     app: tauri::AppHandle,
     host: String,
@@ -5685,7 +5685,7 @@ async fn sqlite_execute_script(
     .map_err(|e| format!("sqlite_execute_script join: {e}"))?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn terminal_create(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -5920,7 +5920,7 @@ fn terminal_current_cwd(
 /// dir (those are about *what to type*, not *what files exist where*),
 /// so the user sees the same docker/git/kubectl subcommands as in a
 /// local tab.
-#[tauri::command]
+#[tauri::command(async)]
 fn terminal_completions_remote(
     state: tauri::State<'_, AppState>,
     line: String,
@@ -5932,9 +5932,7 @@ fn terminal_completions_remote(
     user: String,
     auth_mode: String,
 ) -> Result<Vec<pier_core::terminal::Completion>, String> {
-    use pier_core::terminal::{
-        complete_with_library_using, DirReadEntry, DirReader, LocalDirReader,
-    };
+    use pier_core::terminal::{complete_with_library_using, DirReadEntry, DirReader};
     use std::path::Path;
 
     let key = sftp_cache_key(&host, port, &user, &auth_mode);
@@ -6035,6 +6033,20 @@ fn terminal_completions_remote(
     let locale_str = locale.as_deref().unwrap_or("en");
     let lib = terminal_smart::completion_library_snapshot();
 
+    /// `DirReader` that lists nothing. Used when no SFTP client is
+    /// cached for the SSH tab yet: file rows from the LOCAL machine
+    /// would be actively wrong for a remote shell (the local
+    /// filesystem has no `/etc` — zero or, worse, misleading
+    /// candidates). Returning no file rows lets the frontend fall
+    /// through to the remote shell's own Tab completion, while
+    /// builtin / $PATH-less library rows still work.
+    struct EmptyDirReader;
+    impl DirReader for EmptyDirReader {
+        fn list(&self, _dir: &Path) -> Vec<DirReadEntry> {
+            Vec::new()
+        }
+    }
+
     let rows = if let Some(client) = sftp_client {
         let reader = SftpDirReader {
             client,
@@ -6043,21 +6055,21 @@ fn terminal_completions_remote(
         complete_with_library_using(&line, cursor, cwd_path, &lib, locale_str, &reader)
     } else {
         // No SFTP cached yet (tab still authenticating, mismatched
-        // auth_mode, etc.) — fall back to local readdir. Library +
-        // history rows are unaffected.
+        // auth_mode, etc.). Library rows are unaffected; file rows
+        // are suppressed rather than answered from the local disk.
         complete_with_library_using(
             &line,
             cursor,
             cwd_path,
             &lib,
             locale_str,
-            &LocalDirReader,
+            &EmptyDirReader,
         )
     };
     Ok(rows)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn terminal_close(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
     // Take the session out under the lock, then release the lock BEFORE
     // dropping it. Dropping a ManagedTerminal joins its reader thread, and
@@ -7086,7 +7098,7 @@ fn docker_volume_usage_impl(
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_container_action(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -7403,12 +7415,12 @@ fn sftp_browse_impl(
 
 // ── Markdown ────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(async)]
 fn markdown_render(source: String) -> String {
     markdown::render_html(&source)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn markdown_render_file(path: String) -> Result<String, String> {
     let source = markdown::load_file(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     Ok(markdown::render_html(&source))
@@ -8053,7 +8065,7 @@ fn db_egress_endpoint(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_inspect_db_env(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -8151,7 +8163,7 @@ struct RemoteSqliteCandidate {
     modified: Option<i64>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sqlite_remote_capable(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12034,7 +12046,7 @@ struct NginxReadFileView {
     parse: nginx::NginxParseResult,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sqlite_browse_remote(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12107,7 +12119,7 @@ fn sqlite_browse_remote(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sqlite_execute_remote(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12158,7 +12170,7 @@ fn sqlite_execute_remote(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sqlite_find_in_dir(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12421,7 +12433,7 @@ fn shell_single_quote(s: &str) -> String {
 
 // ── Docker Extended ─────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_inspect(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12450,7 +12462,7 @@ fn docker_inspect(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_remove_image(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12480,7 +12492,7 @@ fn docker_remove_image(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_remove_volume(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12507,7 +12519,7 @@ fn docker_remove_volume(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_remove_network(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12568,7 +12580,7 @@ impl From<DockerRunOptionsView> for docker::RunContainerOptions {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_run_container(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12596,7 +12608,7 @@ fn docker_run_container(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_prune_volumes(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12622,7 +12634,7 @@ fn docker_prune_volumes(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_prune_images(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12648,7 +12660,7 @@ fn docker_prune_images(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_pull_image(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12704,7 +12716,7 @@ async fn local_docker_pull_image(
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn docker_volume_files(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12837,7 +12849,7 @@ async fn local_docker_volume_files(mountpoint: String) -> Result<String, String>
 
 // ── SFTP Extended ───────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_mkdir(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12863,7 +12875,7 @@ fn sftp_mkdir(
     sftp.create_dir_blocking(&path).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_remove(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12894,7 +12906,7 @@ fn sftp_remove(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_rename(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12922,7 +12934,7 @@ fn sftp_rename(
 }
 
 /// Change POSIX permissions on a remote file or directory.
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_chmod(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -12951,7 +12963,7 @@ fn sftp_chmod(
 }
 
 /// Create an empty remote file (touch semantic — truncates if exists).
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_create_file(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -13021,7 +13033,7 @@ const SFTP_TEXT_READ_MAX: u64 = 5 * 1024 * 1024;
 /// Read a remote file as UTF-8 text for the editor dialog. Rejects
 /// anything larger than `max_bytes` (capped by [`SFTP_TEXT_READ_MAX`])
 /// before pulling bytes across the wire.
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_read_text(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -13242,7 +13254,7 @@ fn detect_eol(text: &str) -> String {
 
 /// Write UTF-8 text back to a remote file, overwriting. The editor
 /// dialog calls this when the user saves.
-#[tauri::command]
+#[tauri::command(async)]
 fn sftp_write_text(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -13365,8 +13377,53 @@ fn sftp_cancel_transfer(
     Ok(())
 }
 
+// ── SFTP transfers ──────────────────────────────────────────────
+//
+// Every transfer command below is an async wrapper that runs its
+// blocking body on the tokio blocking pool (same pattern as
+// [`sftp_browse`]). A sync `#[tauri::command]` executes inline on
+// the main thread, so a minutes-long transfer used to stall the OS
+// event loop: the window went "Not Responding", and the progress
+// events emitted from the per-chunk callback sat queued behind the
+// blocked event loop and all flushed at once when the command
+// finally returned (the bar jumped 0% → done).
+
 #[tauri::command]
-fn sftp_download(
+async fn sftp_download(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    remote_path: String,
+    local_path: String,
+    saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_download_impl(
+            app.clone(),
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            remote_path,
+            local_path,
+            saved_connection_index,
+            transfer_id,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_download join: {error}"))?
+}
+
+fn sftp_download_impl(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
@@ -13479,7 +13536,38 @@ const SFTP_DROP_UPLOAD_MAX: usize = 64 * 1024 * 1024;
 /// exposes file *contents* but not a local path, so the path-based
 /// [`sftp_upload`] can't be used.
 #[tauri::command]
-fn sftp_write_bytes(
+async fn sftp_write_bytes(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    content_base64: String,
+    saved_connection_index: Option<usize>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_write_bytes_impl(
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            content_base64,
+            saved_connection_index,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_write_bytes join: {error}"))?
+}
+
+fn sftp_write_bytes_impl(
     state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
@@ -13523,7 +13611,41 @@ fn sftp_write_bytes(
 }
 
 #[tauri::command]
-fn sftp_upload(
+async fn sftp_upload(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    local_path: String,
+    remote_path: String,
+    saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_upload_impl(
+            app.clone(),
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            local_path,
+            remote_path,
+            saved_connection_index,
+            transfer_id,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_upload join: {error}"))?
+}
+
+fn sftp_upload_impl(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
@@ -13622,9 +13744,8 @@ fn sftp_upload(
 /// whole tree). See [`sftp_upload`] for the event schema — the shape
 /// is identical.
 #[tauri::command]
-fn sftp_upload_tree(
+async fn sftp_upload_tree(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
     host: String,
     port: u16,
     user: String,
@@ -13638,6 +13759,43 @@ fn sftp_upload_tree(
     // `concurrency`: optional override of the parallel-channel count.
     // Defaults to `DEFAULT_PARALLEL_CONCURRENCY`; pass 1 to force
     // legacy single-channel behavior on servers that cap MaxSessions.
+    concurrency: Option<usize>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_upload_tree_impl(
+            app.clone(),
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            local_path,
+            remote_path,
+            saved_connection_index,
+            transfer_id,
+            concurrency,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_upload_tree join: {error}"))?
+}
+
+fn sftp_upload_tree_impl(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    local_path: String,
+    remote_path: String,
+    saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
     concurrency: Option<usize>,
 ) -> Result<(), String> {
     let session = get_or_open_ssh_session(
@@ -13739,7 +13897,56 @@ fn sftp_upload_tree(
 /// "copy this config file from staging to prod" common case.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-fn sftp_remote_to_remote_copy(
+async fn sftp_remote_to_remote_copy(
+    app: tauri::AppHandle,
+    src_host: String,
+    src_port: u16,
+    src_user: String,
+    src_auth_mode: String,
+    src_password: String,
+    src_key_path: String,
+    src_saved_connection_index: Option<usize>,
+    src_remote_path: String,
+    dst_host: String,
+    dst_port: u16,
+    dst_user: String,
+    dst_auth_mode: String,
+    dst_password: String,
+    dst_key_path: String,
+    dst_saved_connection_index: Option<usize>,
+    dst_remote_path: String,
+    transfer_id: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_remote_to_remote_copy_impl(
+            app.clone(),
+            state,
+            src_host,
+            src_port,
+            src_user,
+            src_auth_mode,
+            src_password,
+            src_key_path,
+            src_saved_connection_index,
+            src_remote_path,
+            dst_host,
+            dst_port,
+            dst_user,
+            dst_auth_mode,
+            dst_password,
+            dst_key_path,
+            dst_saved_connection_index,
+            dst_remote_path,
+            transfer_id,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_remote_to_remote_copy join: {error}"))?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sftp_remote_to_remote_copy_impl(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     src_host: String,
@@ -13913,7 +14120,43 @@ fn sftp_remote_to_remote_copy(
 /// Download a remote directory recursively to `local_path`. Mirror
 /// image of [`sftp_upload_tree`].
 #[tauri::command]
-fn sftp_download_tree(
+async fn sftp_download_tree(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    remote_path: String,
+    local_path: String,
+    saved_connection_index: Option<usize>,
+    transfer_id: Option<String>,
+    concurrency: Option<usize>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_download_tree_impl(
+            app.clone(),
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            remote_path,
+            local_path,
+            saved_connection_index,
+            transfer_id,
+            concurrency,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_download_tree join: {error}"))?
+}
+
+fn sftp_download_tree_impl(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
@@ -14227,7 +14470,37 @@ fn external_edit_watch_loop(
 /// auto-uploads any saves back. Returns a watcher id the frontend
 /// passes to [`sftp_external_edit_stop`] when the dialog closes.
 #[tauri::command]
-fn sftp_open_external(
+async fn sftp_open_external(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<SftpExternalEditOpen, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        sftp_open_external_impl(
+            app.clone(),
+            state,
+            host,
+            port,
+            user,
+            auth_mode,
+            password,
+            key_path,
+            path,
+            saved_connection_index,
+        )
+    })
+    .await
+    .map_err(|error| format!("sftp_open_external join: {error}"))?
+}
+
+fn sftp_open_external_impl(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     host: String,
@@ -14603,7 +14876,7 @@ fn web_server_external_edit_watch_loop(
 /// `save_file_validate_reload_blocking` (backup → write → validate
 /// → restore-on-fail → reload). Returns a watcher id the frontend
 /// passes to [`web_server_external_edit_stop`] when done.
-#[tauri::command]
+#[tauri::command(async)]
 fn web_server_open_external(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -14751,7 +15024,7 @@ fn web_server_external_edit_stop(
 
 // ── Log Stream ──────────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(async)]
 fn log_stream_start(
     state: tauri::State<'_, AppState>,
     host: String,
@@ -15381,7 +15654,7 @@ fn dev_toggle_devtools() -> Result<(), String> {
 /// the user picked via the OS file dialog. Capped at 64 MiB so a
 /// pathological pick can't OOM the renderer; bigger imports go
 /// through `mysqldump`/`pg_dump` (still TODO).
-#[tauri::command]
+#[tauri::command(async)]
 fn local_read_text_file(path: String) -> Result<String, String> {
     let p = std::path::Path::new(&path);
     let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
@@ -15399,7 +15672,7 @@ fn local_read_text_file(path: String) -> Result<String, String> {
 /// Write a UTF-8 text file to the local filesystem. Used by the DB
 /// panels' "Export SQL" right-click action to save the generated
 /// dump to a path the user picked via the OS save dialog.
-#[tauri::command]
+#[tauri::command(async)]
 fn local_write_text_file(path: String, content: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if let Some(parent) = p.parent() {

@@ -145,7 +145,7 @@ pub fn terminal_completions(
 /// message instead of treating it as a hard error. Genuine errors
 /// (invalid name, I/O failure) come back as `Err(String)` and are
 /// surfaced as toasts.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn terminal_man_synopsis(command: String) -> Result<Option<ManSynopsis>, String> {
     use pier_core::terminal::ManError;
     match man_synopsis(&command) {
