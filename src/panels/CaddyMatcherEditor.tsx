@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, AtSign, Plus, Trash2 } from "lucide-react";
 import type { CaddyNode } from "../lib/commands";
+import Select from "../components/Select";
 import { useI18n } from "../i18n/useI18n";
 import {
   collectScopes,
@@ -274,17 +275,14 @@ function NewMatcherForm({
         placeholder="api"
         spellCheck={false}
       />
-      <select
+      <Select
         className="ngx-input mono"
+        compact
+        mono
         value={type}
-        onChange={(e) => setType(e.target.value)}
-      >
-        {MATCHER_TYPE_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+        onChange={(val) => setType(val)}
+        items={MATCHER_TYPE_OPTIONS}
+      />
       <input
         className="ngx-input mono caddy-mat__value-input"
         value={value}
@@ -356,25 +354,25 @@ function MatcherCard({
         />
         {!isBlockForm ? (
           <>
-            <select
+            <Select
               className="ngx-input mono"
+              compact
+              mono
               value={draftType}
-              onChange={(e) => {
-                setDraftType(e.target.value);
-                commitArgs(e.target.value, draftValue);
+              onChange={(val) => {
+                setDraftType(val);
+                commitArgs(val, draftValue);
               }}
-            >
-              {MATCHER_TYPE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-              {draftType && !MATCHER_TYPE_OPTIONS.some((o) => o.value === draftType) && (
-                <option key={draftType} value={draftType}>
-                  {draftType}
-                </option>
-              )}
-            </select>
+              items={
+                draftType &&
+                !MATCHER_TYPE_OPTIONS.some((o) => o.value === draftType)
+                  ? [
+                      ...MATCHER_TYPE_OPTIONS,
+                      { value: draftType, label: draftType },
+                    ]
+                  : MATCHER_TYPE_OPTIONS
+              }
+            />
             <input
               className="ngx-input mono caddy-mat__value-input"
               value={draftValue}

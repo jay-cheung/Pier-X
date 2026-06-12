@@ -14,6 +14,7 @@ import DbCreateDbDialog from "../components/db/DbCreateDbDialog";
 import type { DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import DbConfigView, { type DbConfigRow } from "../components/db/DbConfigView";
 import DbResultGrid from "../components/db/DbResultGrid";
+import Select from "../components/Select";
 import DbRowDetail from "../components/db/DbRowDetail";
 import { buildFkEdges } from "../components/db/fkNav";
 import { type DbSchemaActions, type DbSchemaDatabase } from "../components/db/DbSchemaTree";
@@ -1078,24 +1079,24 @@ function MySqlPanelBody({ tab }: Props) {
         >
           →
         </button>
-        <select
+        <Select
           className="mono"
+          compact
+          mono
           style={{ fontSize: "var(--size-small)" }}
-          value={pageSize}
-          onChange={(e) => {
-            const next = Number.parseInt(e.currentTarget.value, 10);
+          value={String(pageSize)}
+          onChange={(v) => {
+            const next = Number.parseInt(v, 10);
             if (Number.isFinite(next) && next > 0) {
               void browse(undefined, undefined, 0, next);
             }
           }}
           title={t("Rows per page")}
-        >
-          {[24, 50, 100, 200, 500].map((n) => (
-            <option key={n} value={n}>
-              {n}/{t("page")}
-            </option>
-          ))}
-        </select>
+          items={[24, 50, 100, 200, 500].map((n) => ({
+            value: String(n),
+            label: `${n}/${t("page")}`,
+          }))}
+        />
       </>
     ) : null;
 

@@ -39,6 +39,7 @@ import type { GitReflogEntry } from "../lib/commands";
 import { writeClipboardText } from "../lib/clipboard";
 import Dialog from "../components/Dialog";
 import ConfirmDialog from "../components/ConfirmDialog";
+import Select from "../components/Select";
 import DiffDialog, { type DiffFileInput } from "../shell/DiffDialog";
 import "../styles/git-panel.css";
 import type {
@@ -3364,16 +3365,8 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                     <div className="git-manager__divider" />
                     <GitSectionHeader subtitle={t("Set or remove upstream for a local branch")} title={t("Tracking")} />
                     <div className="git-inline-form">
-                      <select className="git-select" onChange={(event) => setTrackingBranchTarget(event.currentTarget.value)} value={trackingBranchTarget}>
-                        {localBranches.map((branch) => (
-                          <option key={branch} value={branch}>{branch}</option>
-                        ))}
-                      </select>
-                      <select className="git-select" onChange={(event) => setTrackingUpstreamTarget(event.currentTarget.value)} value={trackingUpstreamTarget}>
-                        {remoteBranches.map((branch) => (
-                          <option key={branch} value={branch}>{branch}</option>
-                        ))}
-                      </select>
+                      <Select className="git-select" compact mono onChange={(value) => setTrackingBranchTarget(value)} value={trackingBranchTarget} items={localBranches.map((branch) => ({ value: branch, label: branch }))} />
+                      <Select className="git-select" compact mono onChange={(value) => setTrackingUpstreamTarget(value)} value={trackingUpstreamTarget} items={remoteBranches.map((branch) => ({ value: branch, label: branch }))} />
                     </div>
                     <div className="git-inline-form">
                       <GitButton compact disabled={!trackingBranchTarget || busy} onClick={() => void runGitAction(() => cmd.gitUnsetBranchTracking(currentRepoPath, trackingBranchTarget))}>
@@ -4646,11 +4639,17 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
           ) : (
             <div className="git-card git-card--inset">
               <div className="git-inline-form">
-                <select className="git-select git-select--narrow" onChange={(event) => setRebaseCommitCount(Number(event.currentTarget.value))} value={rebaseCommitCount}>
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                  <option value={50}>50</option>
-                </select>
+                <Select
+                  className="git-select git-select--narrow"
+                  compact
+                  onChange={(value) => setRebaseCommitCount(Number(value))}
+                  value={String(rebaseCommitCount)}
+                  items={[
+                    { value: "10", label: "10" },
+                    { value: "20", label: "20" },
+                    { value: "50", label: "50" },
+                  ]}
+                />
                 <span className="git-inline-note">{t("Recent commits")}</span>
                 <div className="git-commit-actions__spacer" />
                 <GitButton
@@ -4671,24 +4670,26 @@ function GitPanelBody({ browserPath, isActive = true }: Props) {
                 {rebaseDraftItems.length ? (
                   rebaseDraftItems.map((item, index) => (
                     <div className="git-manager-row" key={`${item.hash}-${index}`}>
-                      <select
+                      <Select
                         className="git-select git-select--action"
-                        onChange={(event) =>
+                        compact
+                        onChange={(value) =>
                           setRebaseDraftItems((current) => {
                             const next = [...current];
-                            next[index] = { ...next[index], action: event.currentTarget.value };
+                            next[index] = { ...next[index], action: value };
                             return next;
                           })
                         }
                         value={item.action}
-                      >
-                        <option value="pick">{t("Pick")}</option>
-                        <option value="reword">{t("Reword")}</option>
-                        <option value="edit">{t("Edit")}</option>
-                        <option value="squash">{t("Squash")}</option>
-                        <option value="fixup">{t("Fixup")}</option>
-                        <option value="drop">{t("Drop")}</option>
-                      </select>
+                        items={[
+                          { value: "pick", label: t("Pick") },
+                          { value: "reword", label: t("Reword") },
+                          { value: "edit", label: t("Edit") },
+                          { value: "squash", label: t("Squash") },
+                          { value: "fixup", label: t("Fixup") },
+                          { value: "drop", label: t("Drop") },
+                        ]}
+                      />
                       <span className="git-manager-row__meta git-manager-row__meta--accent">{item.shortHash}</span>
                       <div className="git-manager-row__copy">
                         <div className="git-manager-row__title">{item.message}</div>

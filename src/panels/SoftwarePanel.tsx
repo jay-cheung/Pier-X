@@ -76,6 +76,7 @@ import { confirm } from "../stores/useConfirmStore";
 import Dialog from "../components/Dialog";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
 import Popover from "../components/Popover";
+import Select from "../components/Select";
 import StatusDot from "../components/StatusDot";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import "../styles/software-panel.css";
@@ -4785,24 +4786,23 @@ function CloneHostsDialog({
           <label className="sw-multihost__action-label mono">
             {t("Source host")}:
           </label>
-          <select
+          <Select
             className="dlg-input"
-            value={sourceIdx ?? ""}
-            onChange={(e) => {
-              const v = e.currentTarget.value;
+            value={sourceIdx === null || sourceIdx === undefined ? "" : String(sourceIdx)}
+            onChange={(v) => {
               setSourceIdx(v ? Number(v) : null);
               setPlan(null);
               setPicked(new Set());
             }}
             disabled={running || planBusy}
-          >
-            <option value="">{t("(select)")}</option>
-            {hosts.map((h) => (
-              <option key={h.index} value={h.index}>
-                {h.name || `${h.user}@${h.host}`}
-              </option>
-            ))}
-          </select>
+            items={[
+              { value: "", label: t("(select)") },
+              ...hosts.map((h) => ({
+                value: String(h.index),
+                label: h.name || `${h.user}@${h.host}`,
+              })),
+            ]}
+          />
           <button
             type="button"
             className="btn is-ghost is-compact"
@@ -6342,41 +6342,38 @@ function MultiHostDialog({
           <label className="sw-multihost__action-label mono">
             {t("Action")}:
           </label>
-          <select
+          <Select
             className="dlg-input"
             value={action}
-            onChange={(e) => setAction(e.currentTarget.value as "mirror" | "bundle")}
+            onChange={(v) => setAction(v as "mirror" | "bundle")}
             disabled={busy}
-          >
-            <option value="mirror">{t("Switch mirror")}</option>
-            <option value="bundle">{t("Install bundle")}</option>
-          </select>
+            items={[
+              { value: "mirror", label: t("Switch mirror") },
+              { value: "bundle", label: t("Install bundle") },
+            ]}
+          />
           {action === "mirror" ? (
-            <select
+            <Select
               className="dlg-input"
               value={mirrorPick}
-              onChange={(e) => setMirrorPick(e.currentTarget.value as MirrorId)}
+              onChange={(v) => setMirrorPick(v as MirrorId)}
               disabled={busy}
-            >
-              {mirrorCatalog.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+              items={mirrorCatalog.map((m) => ({
+                value: m.id,
+                label: m.label,
+              }))}
+            />
           ) : (
-            <select
+            <Select
               className="dlg-input"
               value={bundlePick}
-              onChange={(e) => setBundlePick(e.currentTarget.value)}
+              onChange={(v) => setBundlePick(v)}
               disabled={busy}
-            >
-              {bundles.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.displayName}
-                </option>
-              ))}
-            </select>
+              items={bundles.map((b) => ({
+                value: b.id,
+                label: b.displayName,
+              }))}
+            />
           )}
         </div>
         <div className="sw-multihost__hosts">
@@ -6413,12 +6410,13 @@ function MultiHostDialog({
                 <span className="sw-multihost__host-target mono">
                   {h.user}@{h.host}:{h.port}
                 </span>
-                <select
+                <Select
                   className="sw-multihost__host-override mono"
+                  compact
+                  mono
                   value={overrideValue}
                   disabled={busy || !selected.has(h.index)}
-                  onChange={(e) => {
-                    const v = e.currentTarget.value;
+                  onChange={(v) => {
                     setOverrides((prev) => {
                       const next = { ...prev };
                       if (v) next[h.index] = v;
@@ -6427,23 +6425,24 @@ function MultiHostDialog({
                     });
                   }}
                   title={t("Override the action for just this host")}
-                >
-                  <option value="">{t("(default)")}</option>
-                  <optgroup label={t("Switch mirror")}>
-                    {mirrorCatalog.map((m) => (
-                      <option key={`m-${m.id}`} value={`mirror:${m.id}`}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label={t("Install bundle")}>
-                    {bundles.map((b) => (
-                      <option key={`b-${b.id}`} value={`bundle:${b.id}`}>
-                        {b.displayName}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
+                  items={[
+                    { value: "", label: t("(default)") },
+                    {
+                      group: t("Switch mirror"),
+                      options: mirrorCatalog.map((m) => ({
+                        value: `mirror:${m.id}`,
+                        label: m.label,
+                      })),
+                    },
+                    {
+                      group: t("Install bundle"),
+                      options: bundles.map((b) => ({
+                        value: `bundle:${b.id}`,
+                        label: b.displayName,
+                      })),
+                    },
+                  ]}
+                />
                 {status && (
                   <span
                     className={`sw-multihost__host-status sw-multihost__host-status--${status.state}`}
@@ -7498,12 +7497,13 @@ function WebhooksDialog({
                 <div className="sw-webhooks__row-template">
                   <label className="sw-webhooks__template-label">
                     <span className="muted">{t("Body template")}</span>
-                    <select
+                    <Select
                       className="sw-webhooks__preset"
+                      compact
                       value=""
-                      onChange={(ev) => {
+                      onChange={(v) => {
                         const preset = TEMPLATE_PRESETS.find(
-                          (p) => p.id === ev.target.value,
+                          (p) => p.id === v,
                         );
                         if (preset) {
                           updateEntry(idx, {
@@ -7514,14 +7514,14 @@ function WebhooksDialog({
                           }
                         }
                       }}
-                    >
-                      <option value="">{t("Apply preset…")}</option>
-                      {TEMPLATE_PRESETS.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
+                      items={[
+                        { value: "", label: t("Apply preset…") },
+                        ...TEMPLATE_PRESETS.map((p) => ({
+                          value: p.id,
+                          label: p.label,
+                        })),
+                      ]}
+                    />
                     <button
                       type="button"
                       className="btn is-ghost is-compact"
@@ -8786,38 +8786,39 @@ function BundleSchedulesDialog({
                     {s.enabled ? t("Schedule on") : t("Schedule off")}
                   </span>
                 </label>
-                <select
+                <Select
                   className="sw-schedules__bundle mono"
+                  compact
+                  mono
                   value={s.bundleId}
-                  onChange={(e) => {
-                    const next = bundles.find(
-                      (b) => b.id === e.currentTarget.value,
-                    );
+                  onChange={(v) => {
+                    const next = bundles.find((b) => b.id === v);
                     update(idx, {
-                      bundleId: e.currentTarget.value,
+                      bundleId: v,
                       label: next?.displayName,
                     });
                   }}
-                >
-                  {bundles.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.displayName}
-                    </option>
-                  ))}
-                </select>
-                <select
+                  items={bundles.map((b) => ({
+                    value: b.id,
+                    label: b.displayName,
+                  }))}
+                />
+                <Select
                   className="sw-schedules__kind mono"
+                  compact
+                  mono
                   value={s.kind}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     update(idx, {
-                      kind: e.currentTarget.value as BundleSchedule["kind"],
+                      kind: v as BundleSchedule["kind"],
                     })
                   }
-                >
-                  <option value="interval">{t("Every N min")}</option>
-                  <option value="daily">{t("Daily")}</option>
-                  <option value="weekly">{t("Weekly")}</option>
-                </select>
+                  items={[
+                    { value: "interval", label: t("Every N min") },
+                    { value: "daily", label: t("Daily") },
+                    { value: "weekly", label: t("Weekly") },
+                  ]}
+                />
                 <button
                   type="button"
                   className="btn is-ghost is-compact"
@@ -8863,22 +8864,25 @@ function BundleSchedulesDialog({
                     {s.kind === "weekly" && (
                       <label className="sw-schedules__field">
                         <span className="muted">{t("Weekday")}</span>
-                        <select
-                          value={s.weekday ?? 0}
-                          onChange={(e) =>
+                        <Select
+                          compact
+                          mono
+                          value={String(s.weekday ?? 0)}
+                          onChange={(v) =>
                             update(idx, {
-                              weekday: Number(e.currentTarget.value),
+                              weekday: Number(v),
                             })
                           }
-                        >
-                          <option value={0}>{t("Sun")}</option>
-                          <option value={1}>{t("Mon")}</option>
-                          <option value={2}>{t("Tue")}</option>
-                          <option value={3}>{t("Wed")}</option>
-                          <option value={4}>{t("Thu")}</option>
-                          <option value={5}>{t("Fri")}</option>
-                          <option value={6}>{t("Sat")}</option>
-                        </select>
+                          items={[
+                            { value: "0", label: t("Sun") },
+                            { value: "1", label: t("Mon") },
+                            { value: "2", label: t("Tue") },
+                            { value: "3", label: t("Wed") },
+                            { value: "4", label: t("Thu") },
+                            { value: "5", label: t("Fri") },
+                            { value: "6", label: t("Sat") },
+                          ]}
+                        />
                       </label>
                     )}
                     <label className="sw-schedules__field">

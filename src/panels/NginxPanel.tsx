@@ -21,6 +21,8 @@ import {
   X,
 } from "lucide-react";
 import DiffPreview from "../components/DiffPreview";
+import ComboInput from "../components/ComboInput";
+import Select from "../components/Select";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import * as cmd from "../lib/commands";
@@ -1128,24 +1130,19 @@ function AddDirectiveBar({
 
   return (
     <div className="ngx-add-directive">
-      <input
+      <ComboInput
         className="ngx-input mono ngx-add-directive__name"
-        list="ngx-common-directives"
+        mono
         value={name}
-        spellCheck={false}
+        suggestions={COMMON_DIRECTIVES.map((d) => d.name)}
         autoFocus
         placeholder={t("name (e.g. listen)")}
-        onChange={(e) => onPickName(e.target.value)}
+        onChange={(v) => onPickName(v)}
         onKeyDown={(e) => {
           if (e.key === "Enter") submit();
           else if (e.key === "Escape") cancel();
         }}
       />
-      <datalist id="ngx-common-directives">
-        {COMMON_DIRECTIVES.map((d) => (
-          <option key={d.name} value={d.name} />
-        ))}
-      </datalist>
       <input
         className="ngx-input mono ngx-add-directive__args"
         value={args}
@@ -1604,17 +1601,20 @@ function LocationHeaderForm({
     <div className="ngx-form">
       <label className="ngx-form__field">
         <span className="ngx-form__label">{t("Match")}</span>
-        <select
+        <Select
           className="ngx-input mono"
+          compact
+          mono
           value={modifier}
-          onChange={(e) => update({ modifier: e.target.value })}
-        >
-          <option value="">{t("(prefix)")}</option>
-          <option value="=">{t("= (exact)")}</option>
-          <option value="^~">{t("^~ (prefix, no regex)")}</option>
-          <option value="~">{t("~ (regex, case-sensitive)")}</option>
-          <option value="~*">{t("~* (regex, case-insensitive)")}</option>
-        </select>
+          onChange={(val) => update({ modifier: val })}
+          items={[
+            { value: "", label: t("(prefix)") },
+            { value: "=", label: t("= (exact)") },
+            { value: "^~", label: t("^~ (prefix, no regex)") },
+            { value: "~", label: t("~ (regex, case-sensitive)") },
+            { value: "~*", label: t("~* (regex, case-insensitive)") },
+          ]}
+        />
       </label>
       <label className="ngx-form__field ngx-form__field--grow">
         <span className="ngx-form__label">{t("Path")}</span>

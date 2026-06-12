@@ -507,6 +507,25 @@ Pier-X 顶层是一个四行三列的 grid：
 - `Badge.tone="pos"`：`background: var(--pos-dim); color: var(--pos); border: 1px solid color-mix(--pos, transparent 60%)`
 - 其他 tone 类推。
 
+### 9.3b Select / ComboInput（下拉与建议输入）
+
+```tsx
+<Select value={v} onChange={setV} items={[{value,label}, {group, options}]}
+        compact mono className="legacy-width-class" />
+<ComboInput value={v} onChange={setV} suggestions={list} mono />
+```
+
+- **禁止原生 `<select>` / `<datalist>`**：WebView 的原生弹层在 OS 图层渲染，
+  页面 CSS 染不到（暗色主题下弹出白底列表）。所有下拉一律用
+  `components/Select`，自由输入 + 建议一律用 `components/ComboInput`。
+- 触发器 `button.ui-select`（元素限定，覆写旧 class 残留的视觉规则；旧
+  class 只贡献宽度）；弹层 `.ui-pop`（portal 到 body，z-index 1200，与
+  `.ctx-menu` 同层，`--elev` 底 + `--shadow-popover`）。
+- `compact`（22px）用于 toolbar / pager / 表头；`mono` 用于 id、分支名、
+  数字等值；分组用 `{ group, options }`（optgroup 等价物）。
+- 键盘契约：↑↓ 移动、Enter 选中、Esc 只关弹层（stopPropagation，不关宿
+  主 dialog）、字符键 type-ahead。
+
 ### 9.4 ToolStripItem
 
 ```tsx
@@ -910,6 +929,7 @@ toolbar (filter input + level checkboxes + pause/clear)
 10. 添加 / 移除 / 重用途 toolstrip 条目，或改变 panel 默认 `rightTool`，未先更新 `docs/PRODUCT-SPEC.md`。
 11. 渲染路径（JSX body、`useMemo` deps）同步调用 `invoke`（违反 CLAUDE.md Rule 5）。
 12. 引入 Qt / QML / CMake / Corrosion / `pier-ui-gpui` 任何 artefact。
+13. 使用原生 `<select>` / `<datalist>`（OS 图层弹出白底列表，主题染不到）——一律用 `components/Select` / `components/ComboInput`（§9.3b）。
 
 ---
 

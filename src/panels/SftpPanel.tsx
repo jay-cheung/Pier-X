@@ -33,6 +33,7 @@ import { useI18n } from "../i18n/useI18n";
 import { treeRowHeightForDensity, useThemeStore } from "../stores/useThemeStore";
 import { localizeError } from "../i18n/localizeMessage";
 import StatusDot from "../components/StatusDot";
+import Select from "../components/Select";
 import VirtualList from "../components/VirtualList";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -2073,24 +2074,20 @@ function SftpRemoteCopyDialog({
           </div>
           <div className="dlg-row">
             <label className="dlg-row-label">{t("Target host")}</label>
-            <select
+            <Select
               className="dlg-input"
-              value={destIndex}
-              onChange={(e) =>
-                setDestIndex(
-                  e.currentTarget.value === ""
-                    ? ""
-                    : Number(e.currentTarget.value),
-                )
+              value={String(destIndex)}
+              onChange={(value) =>
+                setDestIndex(value === "" ? "" : Number(value))
               }
-            >
-              <option value="">{t("(pick a saved connection)")}</option>
-              {connections.map((c) => (
-                <option key={c.index} value={c.index}>
-                  {c.name || `${c.user}@${c.host}:${c.port}`}
-                </option>
-              ))}
-            </select>
+              items={[
+                { value: "", label: t("(pick a saved connection)") },
+                ...connections.map((c) => ({
+                  value: String(c.index),
+                  label: c.name || `${c.user}@${c.host}:${c.port}`,
+                })),
+              ]}
+            />
           </div>
           <div className="dlg-row">
             <label className="dlg-row-label">{t("Target path")}</label>

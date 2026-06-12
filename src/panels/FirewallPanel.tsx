@@ -31,6 +31,7 @@ import DbConnRow from "../components/DbConnRow";
 import DismissibleNote from "../components/DismissibleNote";
 import StatusDot from "../components/StatusDot";
 import PanelSkeleton, { useDeferredMount } from "../components/PanelSkeleton";
+import Select from "../components/Select";
 import SudoPasswordDialog from "../components/SudoPasswordDialog";
 import { useSudoStore, sudoKeyFor } from "../stores/useSudoStore";
 import { hasPendingHostKeyPrompts } from "../stores/useHostKeyPromptStore";
@@ -800,14 +801,15 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
                 min={1}
                 max={65535}
               />
-              <select
+              <Select
                 className="fw-proto"
                 value={composerProto}
-                onChange={(e) => setComposerProto(e.currentTarget.value as "tcp" | "udp")}
-              >
-                <option value="tcp">TCP</option>
-                <option value="udp">UDP</option>
-              </select>
+                onChange={(val) => setComposerProto(val as "tcp" | "udp")}
+                items={[
+                  { value: "tcp", label: "TCP" },
+                  { value: "udp", label: "UDP" },
+                ]}
+              />
               <button
                 type="button"
                 className="btn is-primary is-compact"
@@ -1148,26 +1150,28 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
             <div className="fw-rule-form">
               <label className="fw-rule-field">
                 <span>{t("Chain")}</span>
-                <select
+                <Select
                   value={customRule.chain}
-                  onChange={(e) => setCustomRule((d) => ({ ...d, chain: e.currentTarget.value as CustomRuleDraft["chain"] }))}
-                >
-                  <option value="INPUT">INPUT</option>
-                  <option value="OUTPUT">OUTPUT</option>
-                  <option value="FORWARD">FORWARD</option>
-                </select>
+                  onChange={(val) => setCustomRule((d) => ({ ...d, chain: val as CustomRuleDraft["chain"] }))}
+                  items={[
+                    { value: "INPUT", label: "INPUT" },
+                    { value: "OUTPUT", label: "OUTPUT" },
+                    { value: "FORWARD", label: "FORWARD" },
+                  ]}
+                />
               </label>
               <label className="fw-rule-field">
                 <span>{t("Protocol")}</span>
-                <select
+                <Select
                   value={customRule.proto}
-                  onChange={(e) => setCustomRule((d) => ({ ...d, proto: e.currentTarget.value as CustomRuleDraft["proto"] }))}
-                >
-                  <option value="tcp">TCP</option>
-                  <option value="udp">UDP</option>
-                  <option value="icmp">ICMP</option>
-                  <option value="all">{t("All")}</option>
-                </select>
+                  onChange={(val) => setCustomRule((d) => ({ ...d, proto: val as CustomRuleDraft["proto"] }))}
+                  items={[
+                    { value: "tcp", label: "TCP" },
+                    { value: "udp", label: "UDP" },
+                    { value: "icmp", label: "ICMP" },
+                    { value: "all", label: t("All") },
+                  ]}
+                />
               </label>
               <label className="fw-rule-field">
                 <span>{t("Source (optional)")}</span>
@@ -1192,14 +1196,15 @@ function FirewallPanelBody({ tab, isActive = true }: Props) {
               </label>
               <label className="fw-rule-field">
                 <span>{t("Action")}</span>
-                <select
+                <Select
                   value={customRule.action}
-                  onChange={(e) => setCustomRule((d) => ({ ...d, action: e.currentTarget.value as CustomRuleDraft["action"] }))}
-                >
-                  <option value="ACCEPT">ACCEPT</option>
-                  <option value="DROP">DROP</option>
-                  <option value="REJECT">REJECT</option>
-                </select>
+                  onChange={(val) => setCustomRule((d) => ({ ...d, action: val as CustomRuleDraft["action"] }))}
+                  items={[
+                    { value: "ACCEPT", label: "ACCEPT" },
+                    { value: "DROP", label: "DROP" },
+                    { value: "REJECT", label: "REJECT" },
+                  ]}
+                />
               </label>
             </div>
             <div className="fw-confirm-body mono">{customRulePreview}</div>

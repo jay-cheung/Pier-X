@@ -673,6 +673,143 @@ select option:disabled {
   color: var(--dim);
 }
 
+/* ─── Select / ComboInput (custom dropdowns) ─────────────────
+ * Self-drawn replacements for native <select> / <datalist>: the
+ * WebView renders native popups in an OS layer page CSS can't
+ * reach (near-white list on the dark theme). Trigger + popover
+ * live here so every dropdown in the app shares one look.
+ *
+ * `button.ui-select` is element-qualified ON PURPOSE: converted
+ * call sites still pass their legacy per-context class (e.g.
+ * .settings__select, .git-select) for width rules, and the extra
+ * specificity lets this base override those classes' leftover
+ * visual properties (native chevron background-image, appearance,
+ * padding) without editing every legacy rule. */
+button.ui-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--control-height);
+  padding: 0 var(--sp-1-5) 0 var(--sp-2);
+  background: var(--panel);
+  background-image: none;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  text-align: left;
+  cursor: default;
+  outline: none;
+  min-width: 0;
+  appearance: none;
+  transition: border-color var(--dur-fast) var(--easing);
+}
+button.ui-select:focus-visible,
+button.ui-select[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+button.ui-select:disabled {
+  color: var(--dim);
+  opacity: 0.6;
+}
+button.ui-select.is-mono { font-family: var(--mono); }
+button.ui-select.is-compact {
+  height: 22px;
+  font-size: var(--size-micro);
+  padding: 0 var(--sp-1) 0 var(--sp-1-5);
+  border-radius: var(--radius-sm);
+}
+.ui-select__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-select__label.is-placeholder { color: var(--dim); }
+.ui-select__chev {
+  flex: none;
+  color: var(--muted);
+}
+
+input.ui-combo {
+  height: var(--control-height);
+  padding: 0 var(--sp-2);
+  background: var(--panel);
+  background-image: none;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--ui-fs-sm);
+  outline: none;
+  min-width: 0;
+  appearance: none;
+  transition: border-color var(--dur-fast) var(--easing);
+}
+input.ui-combo:focus { border-color: var(--accent); }
+input.ui-combo.is-mono { font-family: var(--mono); }
+input.ui-combo::placeholder { color: var(--dim); }
+
+/* Shared popover list (portal on body, above dialog overlays —
+ * same layer as .ctx-menu). */
+.ui-pop {
+  position: fixed;
+  z-index: 1200;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--elev);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  padding: var(--sp-1);
+  display: flex;
+  flex-direction: column;
+}
+.ui-pop__group {
+  padding: var(--sp-1-5) var(--sp-2) var(--sp-0-5);
+  font-size: var(--size-micro);
+  font-weight: 600;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.ui-pop__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-1);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--ui-fs-sm);
+  text-align: left;
+  cursor: default;
+  white-space: nowrap;
+}
+.ui-pop__item.is-plain { padding-left: var(--sp-2); }
+.ui-pop__item.is-hl { background: var(--accent-subtle); }
+.ui-pop__item.is-active .ui-pop__label { color: var(--accent); }
+.ui-pop__item.is-disabled { color: var(--dim); }
+.ui-pop__check {
+  flex: none;
+  width: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.ui-pop__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ─── Toggle switch ──────────────────────────────────────── */
 .switch {
   width: 32px;

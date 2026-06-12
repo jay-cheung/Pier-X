@@ -52,6 +52,7 @@ from [`src/styles/atoms.css`](src/styles/atoms.css).
   (use `--sp-X` / `--radius-X` / `--size-X` / `--ui-fs*`)
 - Hardcoded font family strings like `"IBM Plex Sans"`, `"Inter"`, `"JetBrains Mono"`
 - Bypassing `IconButton` / `.btn` / `PanelHeader` / `DbConnRow` / `StatusDot` / `Badge` to roll your own button or panel chrome
+- Native `<select>` / `<datalist>` elements — the WebView draws their popups in an OS layer page CSS can't style; use `components/Select` / `components/ComboInput` instead
 
 **Allowed:**
 

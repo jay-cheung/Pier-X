@@ -1,6 +1,7 @@
 import { Check, Lock, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { NginxNode } from "../lib/commands";
+import Select from "../components/Select";
 import { useI18n } from "../i18n/useI18n";
 import {
   collectScopes,
@@ -284,17 +285,14 @@ function FeatureCard({
                   className="ngx-form__field ngx-form__field--grow"
                 >
                   <span className="ngx-form__label">{t(f.label)}</span>
-                  <select
+                  <Select
                     className="ngx-input mono"
+                    compact
+                    mono
                     value={String(draft[f.key] ?? "")}
-                    onChange={(e) => commit(f.key, e.target.value)}
-                  >
-                    {f.options.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => commit(f.key, val)}
+                    items={f.options}
+                  />
                 </label>
               );
             }

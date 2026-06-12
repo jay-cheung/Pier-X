@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
+import Select from "../Select";
 import DbStubView from "./DbStubView";
 import type { DdlMutation } from "./dbColumnRules";
 
@@ -948,14 +949,17 @@ function PendingAddRow({
         />
       </td>
       <td className="rg-td">
-        <select
+        <Select
           className="rg-td-input"
+          compact
+          mono
           value={add.nullable ? "yes" : "no"}
-          onChange={(e) => onChange({ nullable: e.currentTarget.value === "yes" })}
-        >
-          <option value="yes">{t("YES")}</option>
-          <option value="no">{t("NO")}</option>
-        </select>
+          onChange={(val) => onChange({ nullable: val === "yes" })}
+          items={[
+            { value: "yes", label: t("YES") },
+            { value: "no", label: t("NO") },
+          ]}
+        />
       </td>
       <td className="rg-td">
         <input

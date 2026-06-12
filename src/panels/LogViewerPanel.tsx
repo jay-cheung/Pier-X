@@ -1,5 +1,4 @@
 import {
-  ChevronDown,
   ExternalLink,
   FolderTree,
   Pin,
@@ -32,6 +31,7 @@ import { useI18n } from "../i18n/useI18n";
 import { localizeError, localizeRuntimeMessage } from "../i18n/localizeMessage";
 import DismissibleNote from "../components/DismissibleNote";
 import PanelHeader from "../components/PanelHeader";
+import Select from "../components/Select";
 import StatusDot from "../components/StatusDot";
 import LogViewerDialog from "../shell/LogViewerDialog";
 import { useTabStore } from "../stores/useTabStore";
@@ -613,23 +613,20 @@ function LogViewerPanelBody({ tab, isActive = true }: Props) {
             </button>
             <div className="lg-pick lg-pick--grow">
               <label>{t("FILE")}</label>
-              <div className="lg-sel">
-                <select
-                  className="lg-sel-native"
-                  value={source.filePath}
-                  onChange={(e) => patchSource({ filePath: e.currentTarget.value })}
-                >
-                  <option value="">
-                    {fileList.length === 0 ? t("(scan to list files)") : t("(choose a file)")}
-                  </option>
-                  {fileList.map((f) => (
-                    <option key={f.path} value={f.path}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={10} />
-              </div>
+              <Select
+                className="lg-sel-native"
+                compact
+                mono
+                value={source.filePath}
+                onChange={(val) => patchSource({ filePath: val })}
+                items={[
+                  {
+                    value: "",
+                    label: fileList.length === 0 ? t("(scan to list files)") : t("(choose a file)"),
+                  },
+                  ...fileList.map((f) => ({ value: f.path, label: f.name })),
+                ]}
+              />
             </div>
           </div>
         )}
@@ -638,21 +635,15 @@ function LogViewerPanelBody({ tab, isActive = true }: Props) {
           <div className="lg-picker lg-picker--sub">
             <div className="lg-pick lg-pick--grow">
               <label>{t("PRESET")}</label>
-              <div className="lg-sel">
-                <SourceIcon size={11} />
-                <select
-                  className="lg-sel-native"
-                  value={source.systemPresetId}
-                  onChange={(e) => patchSource({ systemPresetId: e.currentTarget.value, systemArg: "" })}
-                >
-                  {LOG_SYSTEM_PRESETS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={10} />
-              </div>
+              <SourceIcon size={11} />
+              <Select
+                className="lg-sel-native"
+                compact
+                mono
+                value={source.systemPresetId}
+                onChange={(val) => patchSource({ systemPresetId: val, systemArg: "" })}
+                items={LOG_SYSTEM_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
+              />
             </div>
             {preset?.argLabel && (
               <div className="lg-pick lg-pick--grow">

@@ -6,6 +6,7 @@ import DbPasswordUpdateDialog from "../components/DbPasswordUpdateDialog";
 import DbTunnelChip from "../components/DbTunnelChip";
 import DismissibleNote from "../components/DismissibleNote";
 import InlineInstallCta from "../components/InlineInstallCta";
+import Select from "../components/Select";
 import DbConnectSplash from "../components/db/DbConnectSplash";
 import DbHeaderPicker, { type DbHeaderInstance } from "../components/db/DbHeaderPicker";
 import RedisKeyDetail, { type RedisEdit } from "../components/db/RedisKeyDetail";
@@ -1031,11 +1032,12 @@ function RedisPanelBody({ tab }: Props) {
             }}
           />
           <label>{t("DB")}</label>
-          <select
+          <Select
             className="rds-input rds-input--narrow"
+            compact
+            mono
             value={db}
-            onChange={(e) => {
-              const next = e.currentTarget.value;
+            onChange={(next) => {
               setDb(next);
               const n = Number.parseInt(next, 10);
               if (Number.isFinite(n)) {
@@ -1043,8 +1045,7 @@ function RedisPanelBody({ tab }: Props) {
               }
             }}
             title={t("Redis DB index (0-15 by default)")}
-          >
-            {(() => {
+            items={(() => {
               // Standard Redis ships 16 DBs by default. If this profile
               // is talking to a server tuned with `databases > 16` and
               // the user already saved a higher value, surface it as an
@@ -1053,13 +1054,12 @@ function RedisPanelBody({ tab }: Props) {
               const extras = Number.isFinite(current) && (current < 0 || current > 15)
                 ? [current]
                 : [];
-              return [...extras, ...Array.from({ length: 16 }, (_, i) => i)].map((i) => (
-                <option key={i} value={String(i)}>
-                  {i}
-                </option>
-              ));
+              return [...extras, ...Array.from({ length: 16 }, (_, i) => i)].map((i) => ({
+                value: String(i),
+                label: String(i),
+              }));
             })()}
-          </select>
+          />
           <button
             type="button"
             className="btn is-ghost is-compact"

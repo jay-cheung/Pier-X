@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plug, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import IconButton from "./IconButton";
+import Select from "./Select";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { useConnectionStore } from "../stores/useConnectionStore";
@@ -188,17 +189,15 @@ export default function PortForwardDialog({ open, onClose }: Props) {
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span className="settings__row-name">{t("Via SSH connection")}</span>
-                <select
+                <Select
                   className="settings__select"
-                  value={connIndex ?? ""}
-                  onChange={(e) => setConnIndex(Number.parseInt(e.currentTarget.value, 10))}
-                >
-                  {connections.map((c) => (
-                    <option key={c.index} value={c.index}>
-                      {c.name} ({c.user}@{c.host}:{c.port})
-                    </option>
-                  ))}
-                </select>
+                  value={connIndex != null ? String(connIndex) : ""}
+                  onChange={(val) => setConnIndex(Number.parseInt(val, 10))}
+                  items={connections.map((c) => ({
+                    value: String(c.index),
+                    label: `${c.name} (${c.user}@${c.host}:${c.port})`,
+                  }))}
+                />
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: "var(--sp-2)" }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>

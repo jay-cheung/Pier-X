@@ -15,9 +15,11 @@ import {
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "../../i18n/useI18n";
+import ComboInput from "../ComboInput";
+import Select from "../Select";
 import type { DataPreview } from "../../lib/types";
 import { confirm } from "../../stores/useConfirmStore";
 import { prettyJsonish } from "./cellFormat";
@@ -1032,19 +1034,16 @@ export default function DbResultGrid({
         )}
         <label className="rg-pager-size">
           <span className="rg-stat-muted">{t("page size")}</span>
-          <select
-            value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.currentTarget.value));
+          <Select
+            compact
+            mono
+            value={String(pageSize)}
+            onChange={(v) => {
+              setPageSize(Number(v));
               setPage(0);
             }}
-          >
-            {PAGE_SIZES.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
+            items={PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) }))}
+          />
         </label>
       </div>
     </div>
@@ -1052,10 +1051,10 @@ export default function DbResultGrid({
 }
 
 /** Inline cell editor — commits on blur or Enter, cancels on Escape.
- *  When `enumValues` is set, the input is wired to a `<datalist>` so
- *  the user gets a typeahead dropdown of valid enum members. The
- *  input is still free-form (so users can paste an unusual value if
- *  the catalog is stale), but the suggestions cover the happy path. */
+ *  When `enumValues` is set, the suggestions give the user a typeahead
+ *  dropdown of valid enum members. The input is still free-form (so
+ *  users can paste an unusual value if the catalog is stale), but the
+ *  suggestions cover the happy path. */
 function CellEditor({
   initial,
   numeric,
@@ -1069,46 +1068,26 @@ function CellEditor({
   onCommit: (v: string) => void;
   onCancel: () => void;
 }) {
-  const ref = useRef<HTMLInputElement | null>(null);
   const [val, setVal] = useState(initial);
-  // Stable id so multiple grids on the page don't collide — the
-  // datalist itself is rendered as a sibling node and referenced by
-  // the input's `list=` attribute.
-  const datalistId = useMemo(
-    () => `rg-enum-${Math.random().toString(36).slice(2, 8)}`,
-    [],
-  );
-  useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
   return (
-    <>
-      <input
-        ref={ref}
-        className={"rg-td-input" + (numeric ? " rg-td-input-num" : "")}
-        value={val}
-        list={enumValues && enumValues.length > 0 ? datalistId : undefined}
-        onChange={(e) => setVal(e.currentTarget.value)}
-        onBlur={() => onCommit(val)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            (e.currentTarget as HTMLInputElement).blur();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          }
-        }}
-      />
-      {enumValues && enumValues.length > 0 && (
-        <datalist id={datalistId}>
-          {enumValues.map((v) => (
-            <option key={v} value={v} />
-          ))}
-        </datalist>
-      )}
-    </>
+    <ComboInput
+      className={"rg-td-input" + (numeric ? " rg-td-input-num" : "")}
+      mono
+      value={val}
+      onChange={(v) => setVal(v)}
+      suggestions={enumValues ?? []}
+      autoFocus
+      onBlur={() => onCommit(val)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    />
   );
 }
 

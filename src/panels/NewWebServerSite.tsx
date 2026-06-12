@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, FilePlus2, X } from "lucide-react";
 import * as cmd from "../lib/commands";
 import type { SshParams, WebServerKind } from "../lib/commands";
+import Select from "../components/Select";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 
@@ -369,19 +370,22 @@ function CaddyFormFields({
         />
       </Field>
       <Field label={t("Mode")}>
-        <select
+        <Select
           className="ngx-input mono"
+          compact
+          mono
           value={form.mode}
-          onChange={(e) =>
+          onChange={(val) =>
             onChange({
               ...form,
-              mode: e.target.value as CaddyForm["mode"],
+              mode: val as CaddyForm["mode"],
             })
           }
-        >
-          <option value="reverse-proxy">{t("Reverse proxy")}</option>
-          <option value="static">{t("Static file server")}</option>
-        </select>
+          items={[
+            { value: "reverse-proxy", label: t("Reverse proxy") },
+            { value: "static", label: t("Static file server") },
+          ]}
+        />
       </Field>
       {form.mode === "reverse-proxy" ? (
         <Field label={t("Upstream")} hint="host:port">
