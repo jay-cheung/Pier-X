@@ -158,8 +158,18 @@ function App() {
    *  "About Pier-X" menu item. Reset on close so subsequent ⌘,
    *  invocations remember the user's last viewed section. */
   const [settingsInitialPage, setSettingsInitialPage] = useState<
-    "About" | "Keymap" | undefined
+    "About" | "Keymap" | "Ai" | undefined
   >(undefined);
+
+  // Panels request "open Settings on page X" through the UI action
+  // bus (AI panel's unconfigured guide → the Ai page).
+  const openSettingsSeq = useUiActionsStore((s) => s.openSettingsSeq);
+  const openSettingsPage = useUiActionsStore((s) => s.openSettingsPage);
+  useEffect(() => {
+    if (openSettingsSeq === 0) return;
+    if (openSettingsPage === "Ai") setSettingsInitialPage("Ai");
+    setSettingsOpen(true);
+  }, [openSettingsSeq, openSettingsPage]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [broadcastOpen, setBroadcastOpen] = useState(false);
   const [broadcastPrefilter, setBroadcastPrefilter] = useState<
@@ -528,7 +538,7 @@ function App() {
   );
 
   const openSshSaved = useCallback(
-    (index: number) => {
+    (index: number, rightTool: RightTool = "monitor") => {
       const conn = useConnectionStore.getState().connections.find((c) => c.index === index);
       if (!conn) return;
       useRecentConnectionsStore.getState().touch(index);
@@ -559,7 +569,7 @@ function App() {
         sshAuthMode: conn.authKind,
         sshKeyPath: conn.keyPath,
         sshSavedConnectionIndex: conn.index,
-        rightTool: "monitor",
+        rightTool,
         ...(fMysql && {
           mysqlActiveCredentialId: fMysql.id,
           mysqlHost: fMysql.host || "127.0.0.1",
@@ -884,6 +894,12 @@ function App() {
       if (mod && e.shiftKey && e.key.toLowerCase() === "g") {
         e.preventDefault();
         handleToolChange("git");
+        return;
+      }
+      // Cmd+Shift+A — AI panel (§5.14 / §7.1)
+      if (mod && e.shiftKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        handleToolChange("ai");
         return;
       }
       // Cmd+1..9 — Switch to tab by ordinal index.

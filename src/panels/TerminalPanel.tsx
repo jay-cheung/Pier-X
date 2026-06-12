@@ -41,6 +41,7 @@ import type {
 } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useTabStore } from "../stores/useTabStore";
+import { useAiStore } from "../stores/useAiStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useStatusStore } from "../stores/useStatusStore";
 import { useThemeStore, TERMINAL_THEMES } from "../stores/useThemeStore";
@@ -97,6 +98,21 @@ function terminalCreateErrorString(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+// True when a post-session terminal command (resize / write / scrollback)
+// failed only because the channel had already exited. Surfacing this as
+// the big red error banner blanks the whole terminal; the "Exited" status
+// chip + Restart button (driven by snapshot.alive === false) is the right
+// recovery affordance, so callers swallow these instead of painting the
+// banner over the last screen contents.
+function isChannelExitedError(error: unknown): boolean {
+  const message = terminalCreateErrorString(error).toLowerCase();
+  return (
+    message.includes("ssh channel task has exited") ||
+    message.includes("ssh channel closed") ||
+    message.includes("channel task has exited")
+  );
 }
 
 function isTransientSshChannelOpenError(error: unknown): boolean {
@@ -940,9 +956,13 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     // Restart) is the recovery path; painting the BrokenPipe error
     // over the last screen contents would just hide it.
     if (snapshotRef.current?.alive === false) return;
-    cmd.terminalResize(session.sessionId, terminalSize.cols, terminalSize.rows).catch((e) =>
-      setError(formatError(e)),
-    );
+    cmd.terminalResize(session.sessionId, terminalSize.cols, terminalSize.rows).catch((e) => {
+      // The channel can die in the window between create and the first
+      // snapshot (before the alive=false guard above can catch it). Let
+      // the Exited surface handle that instead of the red banner.
+      if (isChannelExitedError(e)) return;
+      setError(formatError(e));
+    });
   }, [session, isActive, terminalSize.cols, terminalSize.rows]);
 
   useEffect(() => {
@@ -959,9 +979,10 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         pendingResizeRef.current = false;
         if (snapshotRef.current?.alive === false) return;
         const size = latestSizeRef.current;
-        cmd.terminalResize(session.sessionId, size.cols, size.rows).catch((e) =>
-          setError(formatError(e)),
-        );
+        cmd.terminalResize(session.sessionId, size.cols, size.rows).catch((e) => {
+          if (isChannelExitedError(e)) return;
+          setError(formatError(e));
+        });
       });
     };
     window.addEventListener("mouseup", onMouseUp);
@@ -998,9 +1019,10 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     if (!session) {
       return;
     }
-    cmd.terminalSetScrollbackLimit(session.sessionId, scrollbackLines).catch((e) =>
-      setError(formatError(e)),
-    );
+    cmd.terminalSetScrollbackLimit(session.sessionId, scrollbackLines).catch((e) => {
+      if (isChannelExitedError(e)) return;
+      setError(formatError(e));
+    });
   }, [session?.sessionId, scrollbackLines]);
 
   // ── Persist last cwd so a restart re-cd's the new session ────
@@ -1033,6 +1055,7 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
         updateTab(tab.id, { startupCommand: "" });
       })
       .catch((e) => {
+        if (isChannelExitedError(e)) return;
         setError(formatError(e));
       });
   }, [session?.sessionId, tab.id, tab.startupCommand]);
@@ -2977,6 +3000,33 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     sel?.addRange(range);
   }
 
+  // ── "Ask AI" bridge (§5.14.5) ────────────────────────────────
+  // Stage terminal text as a pending attachment on this tab's AI
+  // conversation and switch the right tool to the assistant. The
+  // attachment is visible (and removable) in the panel before
+  // anything is sent.
+
+  function openAiWithAttachment(label: string, content: string) {
+    if (!content.trim()) return;
+    useAiStore.getState().addPendingAttachment(tab.id, { label, content });
+    useTabStore.getState().setTabRightTool(tab.id, "ai");
+  }
+
+  async function askAiAboutSelection() {
+    const text = await getSelectionTextForCopy();
+    openAiWithAttachment(t("terminal selection"), text);
+  }
+
+  function askAiAboutScreen() {
+    const snap = snapshotRef.current;
+    if (!snap) return;
+    const text = snap.lines
+      .map((l) => copySliceTerminalLine(l, 0, terminalLineCells(l)))
+      .join("\n")
+      .trimEnd();
+    openAiWithAttachment(t("terminal output (visible screen)"), text);
+  }
+
   async function clearTerminal() {
     if (!session) return;
     // Send form-feed / "clear" sequence (xterm CSI 3 J erases scrollback, \x1b[H\x1b[2J clears screen).
@@ -3185,6 +3235,17 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
             shortcut: `${mod}K`,
             disabled: !session,
             action: () => void clearTerminal(),
+          },
+          { divider: true },
+          {
+            label: t("Ask AI about selection"),
+            disabled: !hasSelection,
+            action: () => void askAiAboutSelection(),
+          },
+          {
+            label: t("Ask AI about screen output"),
+            disabled: !session,
+            action: askAiAboutScreen,
           },
           { divider: true },
           {

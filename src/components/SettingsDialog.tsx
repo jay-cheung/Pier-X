@@ -16,6 +16,7 @@ import {
   Server,
   Settings as SettingsIcon,
   ShieldCheck,
+  Sparkles,
   Sun,
   Terminal as TerminalIcon,
   Trash2,
@@ -45,6 +46,8 @@ import IconButton from "./IconButton";
 import SudoPasswordDialog from "./SudoPasswordDialog";
 import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
+import * as aiCmd from "../lib/ai";
+import { AI_VENDOR_GROUP_LABELS, aiVendorById, aiVendorsByGroup } from "../lib/aiVendors";
 import {
   useThemeStore,
   TERMINAL_THEMES,
@@ -79,6 +82,7 @@ type Page =
   | "Terminal"
   | "Editor"
   | "Keymap"
+  | "Ai"
   | "Connections"
   | "Profiles"
   | "Git"
@@ -103,6 +107,7 @@ const PAGE_LABEL: Record<Page, string> = {
   Terminal: "Terminal",
   Editor: "Editor",
   Keymap: "Keymap",
+  Ai: "AI",
   Connections: "Connections",
   Profiles: "Profiles",
   Git: "Git",
@@ -128,6 +133,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Integrations",
     items: [
+      { key: "Ai", icon: Sparkles },
       { key: "Connections", icon: Server },
       { key: "Profiles", icon: TerminalIcon },
       { key: "Git", icon: GitBranch },
@@ -2033,6 +2039,298 @@ function AboutPanel({ coreInfo, onCheckForUpdates }: { coreInfo?: CoreInfo | nul
 
 // ── Main dialog ─────────────────────────────────────────────────
 
+// ── AI assistant settings (PRODUCT-SPEC §5.14 / §6.3) ───────────
+// Non-secret config lives in useSettingsStore (localStorage like
+// every other setting); the API key goes straight to the OS keyring
+// via `ai_secret_set` and is never echoed back.
+
+function AiSettingsPanel() {
+  const { t } = useI18n();
+  const settings = useSettingsStore();
+  const vendorId = settings.aiVendorId;
+  const vendor = aiVendorById(vendorId);
+
+  const [keyDraft, setKeyDraft] = useState("");
+  const [keySaved, setKeySaved] = useState<boolean | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [fetchState, setFetchState] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [whitelist, setWhitelist] = useState<aiCmd.AiWhitelistEntry[]>([]);
+
+  // Per-vendor key slot: switching vendors re-reads ITS keyring
+  // entry and drops the previous vendor's fetched model list.
+  useEffect(() => {
+    setKeyDraft("");
+    setKeySaved(null);
+    setModels([]);
+    setFetchState(null);
+    aiCmd
+      .aiSecretStatus(vendorId)
+      .then(setKeySaved)
+      .catch(() => setKeySaved(null));
+  }, [vendorId]);
+
+  useEffect(() => {
+    aiCmd
+      .aiWhitelistList()
+      .then(setWhitelist)
+      .catch(() => setWhitelist([]));
+  }, []);
+
+  const applyVendor = (id: string) => {
+    if (id === vendorId) return;
+    const preset = aiVendorById(id);
+    settings.setAiVendorId(id);
+    settings.setAiProviderKind(preset.kind);
+    settings.setAiBaseUrl(preset.baseUrl);
+    settings.setAiModel("");
+  };
+
+  const providerPayload = (): aiCmd.AiProviderSettings => ({
+    kind: settings.aiProviderKind,
+    baseUrl: settings.aiBaseUrl,
+    model: settings.aiModel,
+    maxTokens: settings.aiMaxTokens > 0 ? settings.aiMaxTokens : null,
+    secretId: vendorId,
+  });
+
+  const saveKey = () => {
+    void aiCmd
+      .aiSecretSet(vendorId, keyDraft)
+      .then(() => {
+        setKeySaved(keyDraft.trim().length > 0);
+        setKeyDraft("");
+      })
+      .catch(() => {});
+  };
+
+  // Doubles as the connection test: a successful fetch proves
+  // endpoint + key in one round-trip.
+  const fetchModels = () => {
+    setFetching(true);
+    setFetchState(null);
+    aiCmd
+      .aiListModels(providerPayload())
+      .then((list) => {
+        setModels(list);
+        setFetchState(
+          list.length > 0
+            ? `${list.length} ${t("models available — pick one or keep typing.")}`
+            : t("Endpoint returned an empty list — type the model id manually."),
+        );
+      })
+      .catch((err) => setFetchState(String(err)))
+      .finally(() => setFetching(false));
+  };
+
+  return (
+    <>
+      <SectionTitle>{t("Model provider")}</SectionTitle>
+      <SettingRow
+        label={t("Provider")}
+        description={t("Bring your own key. Nothing leaves this machine until a model is configured.")}
+      >
+        <select
+          className="settings__select"
+          value={vendorId}
+          onChange={(e) => applyVendor(e.currentTarget.value)}
+        >
+          {aiVendorsByGroup().map(({ group, vendors }) => (
+            <optgroup key={group} label={t(AI_VENDOR_GROUP_LABELS[group])}>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow
+        label={t("Base URL")}
+        description={t("Preset default — always editable, so a vendor moving its endpoint never blocks you.")}
+      >
+        <input
+          className="settings__select"
+          value={settings.aiBaseUrl}
+          onChange={(e) => settings.setAiBaseUrl(e.currentTarget.value)}
+          placeholder={vendor.baseUrl || "https://…/v1"}
+          style={{ fontFamily: "var(--mono)" }}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t("API key")}
+        description={
+          keySaved
+            ? t("Stored in the OS keyring. Enter a new value to replace, or save empty to remove.")
+            : vendor.needsKey
+              ? t("Stored in the OS keyring (never in config files). Each vendor keeps its own slot.")
+              : t("This endpoint usually needs no key — leave empty.")
+        }
+      >
+        <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+          <input
+            className="settings__select"
+            type="password"
+            value={keyDraft}
+            onChange={(e) => setKeyDraft(e.currentTarget.value)}
+            placeholder={keySaved ? "••••••••" : (vendor.keyHint ?? t("(not set)"))}
+            autoComplete="off"
+          />
+          <button type="button" className="btn is-compact" onClick={saveKey}>
+            {t("Save")}
+          </button>
+        </div>
+      </SettingRow>
+      <SettingRow
+        label={t("Model")}
+        description={
+          fetchState ?? t("Fetch the endpoint's model list and pick one — or type any model id, listed or not.")
+        }
+      >
+        <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+          <input
+            className="settings__select"
+            list="ai-model-options"
+            value={settings.aiModel}
+            onChange={(e) => settings.setAiModel(e.currentTarget.value)}
+            placeholder={vendor.modelHint ?? "model-id"}
+            style={{ fontFamily: "var(--mono)" }}
+          />
+          <datalist id="ai-model-options">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <button type="button" className="btn is-compact" onClick={fetchModels} disabled={fetching}>
+            {fetching ? t("Fetching…") : t("Fetch models")}
+          </button>
+        </div>
+      </SettingRow>
+      <SettingRow
+        label={t("Max tokens per turn")}
+        description={t("0 = default (4096). Caps a single model response.")}
+      >
+        <input
+          className="settings__select"
+          type="number"
+          min={0}
+          max={64000}
+          value={settings.aiMaxTokens}
+          onChange={(e) => settings.setAiMaxTokens(Number(e.currentTarget.value))}
+          style={{ width: 100 }}
+        />
+      </SettingRow>
+
+      <SectionTitle>{t("Saved configurations")}</SectionTitle>
+      <SettingRow
+        label={t("Configurations")}
+        description={t("Keep several vendor/model combos side by side; activate one here or switch from the AI panel's dropdown. Edits above are saved into the active configuration; switching vendor starts a new draft.")}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)", alignItems: "flex-end", minWidth: 0 }}>
+          <button
+            type="button"
+            className="btn is-compact"
+            onClick={settings.saveCurrentAsAiProfile}
+            disabled={!settings.aiModel.trim()}
+          >
+            {t("Save current as configuration")}
+          </button>
+          {settings.aiProfiles.length === 0 && (
+            <span style={{ color: "var(--dim)" }}>{t("(none saved yet)")}</span>
+          )}
+          {settings.aiProfiles.map((p) => {
+            const active = p.id === settings.aiActiveProfileId;
+            return (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+                <code
+                  style={{
+                    fontFamily: "var(--mono)",
+                    color: active ? "var(--accent)" : "var(--ink-2)",
+                    fontSize: "var(--ui-fs-sm)",
+                  }}
+                >
+                  {p.name}
+                </code>
+                {active ? (
+                  <span style={{ color: "var(--accent)", fontSize: "var(--size-micro)" }}>{t("Active")}</span>
+                ) : (
+                  <button type="button" className="btn is-compact" onClick={() => settings.activateAiProfile(p.id)}>
+                    {t("Activate")}
+                  </button>
+                )}
+                <button type="button" className="btn is-compact" onClick={() => settings.deleteAiProfile(p.id)}>
+                  {t("Remove")}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </SettingRow>
+
+      <SectionTitle>{t("Context & privacy")}</SectionTitle>
+      <SettingRow
+        label={t("Send tab context")}
+        description={t("Host, cwd, OS and detected services for the active tab ride along with each message.")}
+      >
+        <Toggle checked={settings.aiAutoContext} onChange={settings.setAiAutoContext} />
+      </SettingRow>
+      <SettingRow
+        label={t("Redact secrets")}
+        description={t("Mask private keys, tokens and password assignments before anything is sent to the model.")}
+      >
+        <Toggle checked={settings.aiRedact} onChange={settings.setAiRedact} />
+      </SettingRow>
+      <SettingRow
+        label={t("Save history to disk")}
+        description={t("Keep AI conversations (and their audit trail) across restarts. Turn off for memory-only history; existing transcripts stay until you clear the conversation.")}
+      >
+        <Toggle checked={settings.aiPersistHistory} onChange={settings.setAiPersistHistory} />
+      </SettingRow>
+
+      <SectionTitle>{t("Execution")}</SectionTitle>
+      <SettingRow
+        label={t("Ask for read-only actions too")}
+        description={t("By default L0 read-only commands auto-run (visible in the chat). Turn on to approve every action.")}
+      >
+        <Toggle checked={settings.aiAskReadOnly} onChange={settings.setAiAskReadOnly} />
+      </SettingRow>
+      <SettingRow
+        label={t("Allow list")}
+        description={t("Commands granted “Always allow”. L2 high-risk and L3 red-line actions can never be listed here.")}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)", minWidth: 0 }}>
+          {whitelist.length === 0 && <span style={{ color: "var(--dim)" }}>{t("(empty)")}</span>}
+          {whitelist.map((entry) => (
+            <div
+              key={`${entry.host}:${entry.prefix}`}
+              style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}
+            >
+              <code style={{ fontFamily: "var(--mono)", color: "var(--ink-2)" }}>
+                {entry.prefix}
+              </code>
+              <span style={{ color: "var(--dim)", fontSize: "var(--size-micro)" }}>@{entry.host}</span>
+              <button
+                type="button"
+                className="btn is-compact"
+                onClick={() => {
+                  void aiCmd.aiWhitelistRemove(entry.host, entry.prefix).then(() =>
+                    setWhitelist((prev) =>
+                      prev.filter((e) => !(e.host === entry.host && e.prefix === entry.prefix)),
+                    ),
+                  );
+                }}
+              >
+                {t("Remove")}
+              </button>
+            </div>
+          ))}
+        </div>
+      </SettingRow>
+    </>
+  );
+}
+
 export default function SettingsDialog({
   open,
   onClose,
@@ -2153,16 +2451,16 @@ export default function SettingsDialog({
                 </SettingRow>
 
                 <SettingRow
-                  label={t("Interface text scale")}
-                  description={t("{scale}% — affects all UI text.", {
+                  label={t("Interface scale")}
+                  description={t("{scale}% — scales the whole interface: text, icons, and spacing.", {
                     scale: (settings.uiScale * 100).toFixed(0),
                   })}
                 >
                   <input
                     className="settings__slider"
                     type="range"
-                    min={0.9}
-                    max={1.2}
+                    min={0.8}
+                    max={1.5}
                     step={0.05}
                     value={settings.uiScale}
                     onChange={(e) => settings.setUiScale(Number(e.currentTarget.value))}
@@ -2185,7 +2483,8 @@ export default function SettingsDialog({
 
                 <SectionTitle>{t("Preview")}</SectionTitle>
                 <div className="settings__preview-card">
-                  <p style={{ fontFamily: `"${settings.uiFontFamily}", var(--sans)`, fontSize: `${13 * settings.uiScale}px` }}>
+                  {/* No ×uiScale here: webview zoom already scales rendered px. */}
+                  <p style={{ fontFamily: `"${settings.uiFontFamily}", var(--sans)`, fontSize: "13px" }}>
                     {t("The quick brown fox jumps over the lazy dog — Bold text")}
                   </p>
                   <p
@@ -2390,6 +2689,13 @@ export default function SettingsDialog({
             {page === "Git" && (
               <div className="settings__page">
                 <GitConfigPanel />
+              </div>
+            )}
+
+            {/* ── AI assistant ────────────────────────────── */}
+            {page === "Ai" && (
+              <div className="settings__page">
+                <AiSettingsPanel />
               </div>
             )}
 

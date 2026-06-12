@@ -170,3 +170,29 @@ replica counts, and exposes file-level actions). Bridging requires:
 | Per-service `logs` / `restart` / `stop` actions in the services table | shipped | `feat/docker-compose-derived` — `serviceAction` fans out the existing container commands across replicas (no compose CLI) |
 | Health / replica summary (e.g. "4/5 healthy") | shipped | `feat/docker-compose-derived` — service header row carries `{count} replicas` + `{running}/{total} running` |
 | "Active compose file" as tab state (remembered per SSH host) | blocked-by-spec | Same — file picking is out-of-spec |
+
+## AI assistant panel (§5.14)
+
+v1 shipped: panel + BYOK providers (Anthropic / OpenAI-compatible / Ollama,
+streaming via `pier-core::services::ai::provider` over `ureq`), risk classifier
+L0–L3 with the seven red lines + fail-closed default (`risk.rs`, unit-tested),
+secret redactor, per-tab conversations with transcript replay
+(`ai-history/<tab>.jsonl`) + a memory-only toggle (`aiPersistHistory`),
+approval cards (allow once / session / always), host-scoped allowlist
+(`ai-whitelist.json`, L1-only — enforced backend-side), tools `run_command` /
+`read_file` / `list_dir` / `monitor_snapshot` / `write_file` (SFTP/local
+write, 5 MB cap, path classified via `classify_write_path` — critical system
+files / audit logs / block devices are L3), terminal link (context-menu "Ask
+AI" for selection / visible screen → removable attachment chips; fenced code
+blocks in answers get copy + insert-into-terminal without trailing newline,
+multi-line only under bracketed paste else clipboard fallback), settings page
+(key → keyring `pier-x.ai.<kind>`), `Ctrl+Shift+A`.
+
+| Area | Design surface (§5.14) | Status | Notes |
+|---|---|---|---|
+| Context attach | Smart-mode block / SFTP editor file as explicit attachments | partial | Terminal selection + visible screen shipped; smart-mode block hover needs a block UI in the webview terminal; SFTP editor "attach current file" not wired |
+| NL→command | `#` prefix in terminal input (candidate) | hidden | Spec says decide on usage data |
+| Tools | `db_query` (dual-gated with panel write unlock), `git_*`, `docker_*` | hidden | §5.14.3 table requires re-registering each tool as it ships |
+| L2 confirm | Typed object-name unlock for data-destroying subset | partial | v1 requires typing the command's first word for ALL L2 — stricter than spec minimum, revisit when `db_query` lands |
+| Token usage | Per-turn usage display | partial | Sums shown in panel bar; OpenAI-compatible streams without `stream_options` report no usage (provider-dependent) |
+| Local exec cancel | Stop button kills in-flight LOCAL command | partial | SSH path cancels via `CancellationToken`; local `local_exec::exec` runs to completion (cancel only stops reading) |

@@ -45,6 +45,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
+mod ai;
+use ai::*;
+
 mod git_panel;
 use git_panel::*;
 
@@ -2099,10 +2102,44 @@ fn get_or_open_sftp_client(
     Ok(client)
 }
 
-/// Run `op` against the cached session. On a first-attempt failure
-/// that looks like a dead session (any `Err(_)`), evict the cache
-/// entry and try again with a fresh session. The second failure
-/// bubbles up unchanged.
+/// Heuristic for "a fresh connection would fix this", used alongside
+/// [`SshSession::is_closed`] to decide whether a failed op should evict +
+/// reconnect the shared session. Covers two families:
+///
+///   * the transport is dead (`is_closed` is the authoritative signal, but
+///     the russh task can take a beat to drop its sender after the wire
+///     goes, so an op can surface a transport error while `is_closed` is
+///     momentarily false — the string markers cover that window);
+///   * the connection is alive but can no longer open a *channel* on it —
+///     "Failed to open channel (ConnectFailed)" is what the server returns
+///     once its per-connection MaxSessions is reached. A fresh connection
+///     comes with a fresh channel budget, so reconnecting is exactly the
+///     recovery; retrying on the same exhausted session never clears it.
+///
+/// Deliberately excludes operational failures (a command exiting non-zero,
+/// a missing path, a denied permission) so an ordinary command error never
+/// churns the connection sibling tabs share.
+fn error_warrants_reconnect(message: &str) -> bool {
+    let m = message.to_lowercase();
+    m.contains("ssh channel closed")
+        || m.contains("session is no longer alive")
+        || m.contains("broken pipe")
+        || m.contains("connection reset")
+        || m.contains("connection closed")
+        || m.contains("not connected")
+        || m.contains("disconnected")
+        || m.contains("unexpected eof")
+        || m.contains("ssh connect") // connect failed / connect timeout
+        || m.contains("keepalive")
+        || m.contains("failed to open channel") // MaxSessions / channel refusal
+}
+
+/// Run `op` against the cached session. On a first-attempt failure where
+/// the connection is actually dead, evict the cache entry and try again
+/// with a fresh session; the second failure bubbles up unchanged. A
+/// first-attempt failure on a still-live connection (an operational error)
+/// is returned immediately — reconnecting wouldn't help and would tear
+/// down a connection other tabs/panels are using.
 ///
 /// Covers the common case where russh silently drops a session
 /// (server-side idle timeout, network hiccup) and the UI would
@@ -2136,6 +2173,15 @@ where
         match op(&session) {
             Ok(v) => return Ok(v),
             Err(e) if attempt == 0 => {
+                // Only reconnect when the connection itself is dead. On a
+                // still-live session the failure is operational (command
+                // non-zero, missing path, denied permission) — evicting +
+                // reconnecting would tear down a connection sibling tabs
+                // and panels share, and the retry would just hit the same
+                // operational failure. Return it unchanged.
+                if !session.is_closed() && !error_warrants_reconnect(&e) {
+                    return Err(e);
+                }
                 // The retry masks the first attempt's error — log it so a
                 // persistently failing target leaves a trace of the
                 // original cause instead of just costing two handshakes.
@@ -2143,7 +2189,7 @@ where
                     "WARN",
                     "ssh.cache",
                     &format!(
-                        "first attempt failed for {}@{}:{}, retrying with a fresh session: {}",
+                        "first attempt failed for {}@{}:{} on a dead session, reconnecting: {}",
                         user, host, port, e
                     ),
                 );
@@ -2192,9 +2238,24 @@ where
         match op(&session) {
             Ok(v) => return Ok(v),
             Err(e) if attempt == 0 => {
+                // Same connection-vs-operation distinction as
+                // run_with_session_retry: a sudo command failing for an
+                // operational reason (wrong sudo password, docker daemon
+                // down) must NOT evict the shared connection — only a dead
+                // transport warrants reconnecting.
+                if !session.is_closed() && !error_warrants_reconnect(&e) {
+                    return Err(e);
+                }
+                pier_core::logging::write_event(
+                    "WARN",
+                    "ssh.cache",
+                    &format!(
+                        "sudo op first attempt failed for {}@{}:{} on a dead session, reconnecting: {}",
+                        user, host, port, e
+                    ),
+                );
                 evict_ssh_session(state, host, port, user, auth_mode);
                 attempt += 1;
-                let _ = e;
                 continue;
             }
             Err(e) => return Err(e),
@@ -2875,9 +2936,45 @@ fn create_ssh_terminal_from_config(
         &key_path,
         saved_index,
         |session| {
-            session
-                .open_shell_channel_blocking(resolved_cols, resolved_rows)
-                .map_err(|error| error.to_string())
+            // The shell-channel open can transiently fail on a brand-new
+            // connection while the SFTP subsystem + service-detector exec
+            // channels are still mid-flight — a session restore opens all
+            // of them at once. The connection itself is healthy (the SFTP
+            // panel proves it), so re-open the shell channel a few times
+            // on the SAME session, backing off so the retry lands after
+            // the restore's burst of channel opens settles. Only if every
+            // same-session attempt fails do we return Err and let
+            // run_with_session_retry fall back to evict + reconnect (the
+            // recovery for a genuinely dead cached session).
+            const SHELL_OPEN_BACKOFF_MS: [u64; 3] = [400, 1000, 2000];
+            let mut last_err = String::new();
+            for attempt in 0..=SHELL_OPEN_BACKOFF_MS.len() {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        SHELL_OPEN_BACKOFF_MS[attempt - 1],
+                    ));
+                }
+                match session.open_shell_channel_blocking(resolved_cols, resolved_rows) {
+                    Ok(pty) => return Ok(pty),
+                    Err(error) => {
+                        last_err = error.to_string();
+                        pier_core::logging::write_event(
+                            "WARN",
+                            "terminal.ssh",
+                            &format!(
+                                "shell channel open attempt {}/{} failed for {}@{}:{}: {}",
+                                attempt + 1,
+                                SHELL_OPEN_BACKOFF_MS.len() + 1,
+                                config.user,
+                                config.host,
+                                config.port,
+                                last_err
+                            ),
+                        );
+                    }
+                }
+            }
+            Err(last_err)
         },
     )?;
 
@@ -2932,9 +3029,19 @@ fn create_ssh_terminal_from_config(
                 );
                 // First the elevation line (read by user's shell).
                 // Leading SPACE → HISTCONTROL=ignorespace drops it
-                // from .bash_history. The `exec` replaces the bash
-                // process so `exit` doesn't return to a stub shell.
-                let _ = terminal.write(b" exec sudo -S -p '' -i bash\n");
+                // from .bash_history.
+                //
+                // No `exec`: an earlier version ran ` exec sudo …`, which
+                // REPLACES the user's shell. When the sudo password was
+                // wrong/expired sudo then exited with no shell to fall
+                // back to, so the SSH channel closed and the terminal died
+                // with "ssh channel task has exited" — unrecoverable, the
+                // plain shell was gone too. Running sudo as a child instead
+                // means a failed elevation just drops the user back at
+                // their own prompt. The only cost is that `exit` from the
+                // root shell returns to the login shell rather than logging
+                // out in one step — a fine trade for not bricking the tab.
+                let _ = terminal.write(b" sudo -S -p '' -i bash\n");
                 // Then the password as the next line — sudo's `-S`
                 // reads stdin until \n. After auth, sudo runs the
                 // login shell which doesn't see this line.
@@ -15309,6 +15416,7 @@ fn local_write_text_file(path: String, content: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .manage(ai::AiRuntime::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -15633,6 +15741,17 @@ pub fn run() {
             sqlite_execute_remote,
             software_registry,
             software_probe_remote,
+            ai_chat_send,
+            ai_chat_cancel,
+            ai_tool_decision,
+            ai_secret_set,
+            ai_secret_status,
+            ai_test_connection,
+            ai_list_models,
+            ai_whitelist_list,
+            ai_whitelist_remove,
+            ai_replay,
+            ai_clear,
             software_install_remote,
             software_update_remote,
             software_uninstall_remote,

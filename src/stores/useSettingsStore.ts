@@ -1,6 +1,28 @@
 import { create } from "zustand";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { AiProviderKind } from "../lib/ai";
+import { aiVendorById } from "../lib/aiVendors";
 
 export type Locale = "en" | "zh";
+
+/** One saved AI configuration (§5.14.2): a vendor/model combo the
+ *  user can keep alongside others and re-activate from the settings
+ *  page or the AI panel's switcher. The API key is NOT part of the
+ *  profile — keys live in the OS keyring per vendor id, so profiles
+ *  of the same vendor share one key. */
+export type AiProfile = {
+  id: string;
+  name: string;
+  vendorId: string;
+  kind: AiProviderKind;
+  baseUrl: string;
+  model: string;
+  maxTokens: number;
+};
+
+function aiProfileName(vendorId: string, model: string): string {
+  return `${aiVendorById(vendorId).label} · ${model}`;
+}
 
 type SettingsState = {
   // General
@@ -60,6 +82,36 @@ type SettingsState = {
    *  or paste. One per line. Storage-only for now — enforcement is
    *  a future feature. */
   secretScanPatterns: string;
+  // AI assistant (PRODUCT-SPEC §5.14). Non-secret config only —
+  // the API key lives in the OS keyring (`pier-x.ai.<vendor-id>`).
+  /** Selected vendor preset id (see `lib/aiVendors.ts`). Drives the
+   *  keyring slot; `aiProviderKind` / `aiBaseUrl` hold the resolved
+   *  protocol + endpoint and stay user-editable. */
+  aiVendorId: string;
+  aiProviderKind: AiProviderKind;
+  /** Endpoint base URL. Empty = the provider kind's default. */
+  aiBaseUrl: string;
+  /** Model id. Empty = AI assistant unconfigured (panel shows guide). */
+  aiModel: string;
+  /** Per-turn output cap. 0 = backend default (4096). */
+  aiMaxTokens: number;
+  /** Send tab metadata (backend/host/cwd/services) with each turn. */
+  aiAutoContext: boolean;
+  /** Scrub secrets from attachments + tool results before they
+   *  leave the machine. Default on. */
+  aiRedact: boolean;
+  /** Ask even for read-only (L0) operations. */
+  aiAskReadOnly: boolean;
+  /** Save AI conversation history to disk (`ai-history/`). Off =
+   *  memory-only, same stance as terminalHistoryPersist. */
+  aiPersistHistory: boolean;
+  /** Saved configurations: several vendor/model combos stored side
+   *  by side. One can be active at a time; the AI panel switches
+   *  between them. */
+  aiProfiles: AiProfile[];
+  /** Profile currently loaded into the working fields above.
+   *  `null` = unsaved draft (e.g. right after switching vendor). */
+  aiActiveProfileId: string | null;
   // Setters
   setLocale: (locale: Locale) => void;
   setPerformanceOverlay: (on: boolean) => void;
@@ -84,6 +136,21 @@ type SettingsState = {
   setGitCommitSigning: (on: boolean) => void;
   setUpdateCheckOnStartup: (on: boolean) => void;
   setSecretScanPatterns: (patterns: string) => void;
+  setAiVendorId: (id: string) => void;
+  setAiProviderKind: (kind: AiProviderKind) => void;
+  setAiBaseUrl: (url: string) => void;
+  setAiModel: (model: string) => void;
+  setAiMaxTokens: (n: number) => void;
+  setAiAutoContext: (on: boolean) => void;
+  setAiRedact: (on: boolean) => void;
+  setAiAskReadOnly: (on: boolean) => void;
+  setAiPersistHistory: (on: boolean) => void;
+  /** Snapshot the current working fields as a profile (dedupes on
+   *  vendor+baseUrl+model) and mark it active. */
+  saveCurrentAsAiProfile: () => void;
+  /** Load a profile into the working fields and mark it active. */
+  activateAiProfile: (id: string) => void;
+  deleteAiProfile: (id: string) => void;
 };
 
 export const UI_FONT_OPTIONS = [
@@ -131,6 +198,17 @@ type PersistedSettings = Partial<{
   gitCommitSigning: boolean;
   updateCheckOnStartup: boolean;
   secretScanPatterns: string;
+  aiVendorId: string;
+  aiProviderKind: AiProviderKind;
+  aiBaseUrl: string;
+  aiModel: string;
+  aiMaxTokens: number;
+  aiAutoContext: boolean;
+  aiRedact: boolean;
+  aiAskReadOnly: boolean;
+  aiPersistHistory: boolean;
+  aiProfiles: AiProfile[];
+  aiActiveProfileId: string | null;
 }>;
 
 const DEFAULTS = {
@@ -161,6 +239,19 @@ const DEFAULTS = {
   gitCommitSigning: false,
   updateCheckOnStartup: false,
   secretScanPatterns: "",
+  // AI is opt-in (PRODUCT-SPEC §1.1 / §5.14): unconfigured by
+  // default — the panel shows a guide and makes zero requests.
+  aiVendorId: "openai",
+  aiProviderKind: "openai" as AiProviderKind,
+  aiBaseUrl: "",
+  aiModel: "",
+  aiMaxTokens: 0,
+  aiAutoContext: true,
+  aiRedact: true,
+  aiAskReadOnly: false,
+  aiPersistHistory: true,
+  aiProfiles: [] as AiProfile[],
+  aiActiveProfileId: null as string | null,
 };
 
 function loadPrefs(): PersistedSettings {
@@ -199,7 +290,29 @@ function applyMonoFont(family: string) {
 }
 
 function applyUiScale(scale: number) {
-  document.documentElement.style.setProperty("--ui-scale", String(scale));
+  // Native webview zoom scales the ENTIRE interface — fonts, lucide
+  // icons (px-sized via props), spacing tokens, hardcoded px — and
+  // stays crisp (DPR-aware re-render, not bitmap scaling). The old
+  // `--ui-scale` CSS var only multiplied font-size tokens, which is
+  // why "scale" used to grow text but not icons or padding.
+  const fallback = () => {
+    // Permission/platform fallback: type-only scaling via the var
+    // (pre-zoom behavior).
+    document.documentElement.style.setProperty("--ui-scale", String(scale));
+  };
+  try {
+    getCurrentWebview()
+      .setZoom(scale)
+      .then(() => {
+        // Zoom owns the scaling — pin the var so font tokens don't
+        // double-apply on top of it.
+        document.documentElement.style.setProperty("--ui-scale", "1");
+      })
+      .catch(fallback);
+  } catch {
+    // Not running inside a Tauri webview (plain-browser vite dev).
+    fallback();
+  }
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => {
@@ -237,7 +350,37 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     updateCheckOnStartup: stored.updateCheckOnStartup ?? DEFAULTS.updateCheckOnStartup,
     secretScanPatterns:
       stored.secretScanPatterns ?? DEFAULTS.secretScanPatterns,
+    // Pre-vendor-registry configs only stored the protocol kind; the
+    // three original kinds double as vendor ids, so falling back to
+    // `aiProviderKind` keeps their keyring slots working unchanged.
+    aiVendorId: stored.aiVendorId ?? stored.aiProviderKind ?? DEFAULTS.aiVendorId,
+    aiProviderKind: stored.aiProviderKind ?? DEFAULTS.aiProviderKind,
+    aiBaseUrl: stored.aiBaseUrl ?? DEFAULTS.aiBaseUrl,
+    aiModel: stored.aiModel ?? DEFAULTS.aiModel,
+    aiMaxTokens: stored.aiMaxTokens ?? DEFAULTS.aiMaxTokens,
+    aiAutoContext: stored.aiAutoContext ?? DEFAULTS.aiAutoContext,
+    aiRedact: stored.aiRedact ?? DEFAULTS.aiRedact,
+    aiAskReadOnly: stored.aiAskReadOnly ?? DEFAULTS.aiAskReadOnly,
+    aiPersistHistory: stored.aiPersistHistory ?? DEFAULTS.aiPersistHistory,
+    aiProfiles: stored.aiProfiles ?? DEFAULTS.aiProfiles,
+    aiActiveProfileId: stored.aiActiveProfileId ?? DEFAULTS.aiActiveProfileId,
   };
+
+  // Migrate a pre-profiles single config into the first profile so
+  // existing setups appear in the new switcher unchanged.
+  if (initial.aiProfiles.length === 0 && initial.aiModel.trim()) {
+    const migrated: AiProfile = {
+      id: crypto.randomUUID(),
+      name: aiProfileName(initial.aiVendorId, initial.aiModel),
+      vendorId: initial.aiVendorId,
+      kind: initial.aiProviderKind,
+      baseUrl: initial.aiBaseUrl,
+      model: initial.aiModel,
+      maxTokens: initial.aiMaxTokens,
+    };
+    initial.aiProfiles = [migrated];
+    initial.aiActiveProfileId = migrated.id;
+  }
 
   applyUiFont(initial.uiFontFamily);
   applyMonoFont(initial.monoFontFamily);
@@ -269,6 +412,35 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       gitCommitSigning: s.gitCommitSigning,
       updateCheckOnStartup: s.updateCheckOnStartup,
       secretScanPatterns: s.secretScanPatterns,
+      aiVendorId: s.aiVendorId,
+      aiProviderKind: s.aiProviderKind,
+      aiBaseUrl: s.aiBaseUrl,
+      aiModel: s.aiModel,
+      aiMaxTokens: s.aiMaxTokens,
+      aiAutoContext: s.aiAutoContext,
+      aiRedact: s.aiRedact,
+      aiAskReadOnly: s.aiAskReadOnly,
+      aiPersistHistory: s.aiPersistHistory,
+      aiProfiles: s.aiProfiles,
+      aiActiveProfileId: s.aiActiveProfileId,
+    });
+  };
+
+  /** Mirror edits of the working fields into the active profile so
+   *  "edit settings" and "edit the active profile" stay one action.
+   *  Renames the profile when the model changes. */
+  const syncActiveAiProfile = (patch: Partial<Pick<AiProfile, "baseUrl" | "model" | "maxTokens">>) => {
+    const s = get();
+    if (!s.aiActiveProfileId) return;
+    set({
+      aiProfiles: s.aiProfiles.map((p) => {
+        if (p.id !== s.aiActiveProfileId) return p;
+        const next = { ...p, ...patch };
+        if (patch.model !== undefined) {
+          next.name = aiProfileName(p.vendorId, patch.model);
+        }
+        return next;
+      }),
     });
   };
 
@@ -367,6 +539,103 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
     setSecretScanPatterns: (secretScanPatterns) => {
       set({ secretScanPatterns });
+      persist();
+    },
+    setAiVendorId: (aiVendorId) => {
+      // Switching vendor starts a fresh draft: detach from the
+      // active profile so the reset of baseUrl/model that follows
+      // doesn't silently rewrite a saved configuration.
+      set({ aiVendorId, aiActiveProfileId: null });
+      persist();
+    },
+    setAiProviderKind: (aiProviderKind) => {
+      set({ aiProviderKind });
+      persist();
+    },
+    setAiBaseUrl: (aiBaseUrl) => {
+      const trimmed = aiBaseUrl.trim();
+      set({ aiBaseUrl: trimmed });
+      syncActiveAiProfile({ baseUrl: trimmed });
+      persist();
+    },
+    setAiModel: (aiModel) => {
+      const trimmed = aiModel.trim();
+      set({ aiModel: trimmed });
+      syncActiveAiProfile({ model: trimmed });
+      persist();
+    },
+    setAiMaxTokens: (n) => {
+      const clamped = Math.max(0, Math.min(64000, Math.round(n)));
+      set({ aiMaxTokens: clamped });
+      syncActiveAiProfile({ maxTokens: clamped });
+      persist();
+    },
+    setAiAutoContext: (aiAutoContext) => {
+      set({ aiAutoContext });
+      persist();
+    },
+    setAiRedact: (aiRedact) => {
+      set({ aiRedact });
+      persist();
+    },
+    setAiAskReadOnly: (aiAskReadOnly) => {
+      set({ aiAskReadOnly });
+      persist();
+    },
+    setAiPersistHistory: (aiPersistHistory) => {
+      set({ aiPersistHistory });
+      persist();
+    },
+    saveCurrentAsAiProfile: () => {
+      const s = get();
+      if (!s.aiModel.trim()) return;
+      // Dedupe: re-saving an identical combo just re-activates it.
+      const existing = s.aiProfiles.find(
+        (p) => p.vendorId === s.aiVendorId && p.baseUrl === s.aiBaseUrl && p.model === s.aiModel,
+      );
+      if (existing) {
+        set({
+          aiActiveProfileId: existing.id,
+          aiProfiles: s.aiProfiles.map((p) =>
+            p.id === existing.id ? { ...p, maxTokens: s.aiMaxTokens, kind: s.aiProviderKind } : p,
+          ),
+        });
+        persist();
+        return;
+      }
+      const profile: AiProfile = {
+        id: crypto.randomUUID(),
+        name: aiProfileName(s.aiVendorId, s.aiModel),
+        vendorId: s.aiVendorId,
+        kind: s.aiProviderKind,
+        baseUrl: s.aiBaseUrl,
+        model: s.aiModel,
+        maxTokens: s.aiMaxTokens,
+      };
+      set({ aiProfiles: [...s.aiProfiles, profile], aiActiveProfileId: profile.id });
+      persist();
+    },
+    activateAiProfile: (id) => {
+      const s = get();
+      const profile = s.aiProfiles.find((p) => p.id === id);
+      if (!profile) return;
+      set({
+        aiActiveProfileId: profile.id,
+        aiVendorId: profile.vendorId,
+        aiProviderKind: profile.kind,
+        aiBaseUrl: profile.baseUrl,
+        aiModel: profile.model,
+        aiMaxTokens: profile.maxTokens,
+      });
+      persist();
+    },
+    deleteAiProfile: (id) => {
+      const s = get();
+      set({
+        aiProfiles: s.aiProfiles.filter((p) => p.id !== id),
+        // Working fields keep their values; only the link is cut.
+        aiActiveProfileId: s.aiActiveProfileId === id ? null : s.aiActiveProfileId,
+      });
       persist();
     },
   };

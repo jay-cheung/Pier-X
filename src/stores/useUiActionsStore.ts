@@ -35,6 +35,13 @@ type Store = {
   /** Fire the open-failures-tab request. SoftwarePanel listens
    *  and opens the dialog with `activeTab = "failures"`. */
   openWebhookFailures: () => void;
+  /** Bumped every time a panel asks to open the Settings dialog
+   *  on a specific page (AI panel's unconfigured guide → "Ai"). */
+  openSettingsSeq: number;
+  /** Settings page key requested by the latest open-settings call. */
+  openSettingsPage: string | undefined;
+  /** Fire an "open Settings on page X" request. App.tsx listens. */
+  requestOpenSettings: (page?: string) => void;
 };
 
 export const useUiActionsStore = create<Store>((set) => ({
@@ -49,5 +56,12 @@ export const useUiActionsStore = create<Store>((set) => ({
   openWebhookFailures: () =>
     set((state) => ({
       openWebhookFailuresSeq: state.openWebhookFailuresSeq + 1,
+    })),
+  openSettingsSeq: 0,
+  openSettingsPage: undefined,
+  requestOpenSettings: (page?: string) =>
+    set((state) => ({
+      openSettingsSeq: state.openSettingsSeq + 1,
+      openSettingsPage: page,
     })),
 }));

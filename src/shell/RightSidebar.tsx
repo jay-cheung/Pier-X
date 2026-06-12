@@ -12,6 +12,7 @@ import ConnectSplash from "../components/ConnectSplash";
 import PanelHeader from "../components/PanelHeader";
 import PanelSkeleton from "../components/PanelSkeleton";
 
+const AiPanel = lazy(() => import("../panels/AiPanel"));
 const GitPanel = lazy(() => import("../panels/GitPanel"));
 const MySqlPanel = lazy(() => import("../panels/MySqlPanel"));
 const PostgresPanel = lazy(() => import("../panels/PostgresPanel"));
@@ -99,6 +100,10 @@ function ToolContent({
 }) {
   const tabKey = tab?.id ?? "no-tab";
   switch (tool) {
+    case "ai":
+      // Works with or without a tab (welcome view = plain chat, no
+      // execution target), so no ConnectSplash gate.
+      return <AiPanel key={tabKey} tab={tab} isActive={isActive} />;
     case "git":
       return <GitPanel key={tabKey} browserPath={browserPath} isActive={isActive} />;
     case "monitor":

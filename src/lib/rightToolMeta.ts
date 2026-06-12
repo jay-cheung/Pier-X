@@ -7,6 +7,7 @@ import {
   Package,
   Search,
   Shield,
+  Sparkles,
 } from "lucide-react";
 import type { ComponentType, SVGProps } from "react";
 import DockerIcon from "../components/icons/DockerIcon";
@@ -23,6 +24,7 @@ export type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number
  *  a thin divider between categories so related tools cluster
  *  visually without needing horizontal space for text labels. */
 export type RightToolCategory =
+  | "assistant"  // ai
   | "workspace"  // markdown, git
   | "host"       // monitor, firewall
   | "files"      // sftp, log
@@ -31,6 +33,7 @@ export type RightToolCategory =
   | "service";   // webserver, software
 
 export const CATEGORY_LABELS: Record<RightToolCategory, string> = {
+  assistant: "AI assistant",
   workspace: "Workspace",
   host: "Host overview",
   files: "Files & logs",
@@ -69,6 +72,7 @@ export type RightToolMeta = {
 // `.sqlite` files. Without a remote context the strip button is dim,
 // matching mysql / postgres / redis.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
+  "ai",
   "markdown",
   "git",
   "monitor",
@@ -101,6 +105,13 @@ export const SERVICE_CHIP_TOOLS: RightTool[] = [
 ];
 
 export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
+  // PRODUCT-SPEC §5.14 — fixed first position. Works on any tab
+  // (local / SSH / welcome), so no `remoteOnly` and no splash.
+  ai: {
+    label: "AI",
+    category: "assistant",
+    icon: Sparkles,
+  },
   markdown: {
     label: "Markdown",
     category: "workspace",

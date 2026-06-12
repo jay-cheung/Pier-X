@@ -34,6 +34,7 @@
 //! The handle types are always `Send + Sync` so the shell can
 //! move them across worker boundaries safely.
 
+pub mod ai;
 pub mod apache;
 pub mod caddy;
 pub mod code_search;

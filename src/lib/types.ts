@@ -1072,6 +1072,7 @@ export type TerminalTarget =
 export type DataSurface = "mysql" | "sqlite" | "redis" | "postgres";
 
 export type RightTool =
+  | "ai"
   | "git"
   | "monitor"
   | "docker"
