@@ -1108,6 +1108,35 @@ export const postgresExecute = (params: {
   sql: string;
 }) => invoke<QueryExecutionResult>("postgres_execute", params);
 
+// ── SQL Server (tiberius / TDS) ─────────────────────────────────────
+
+export type SqlServerTableRef = { schema: string; name: string };
+
+export type SqlServerOverview = {
+  databases: string[];
+  currentDatabase: string;
+  tables: SqlServerTableRef[];
+};
+
+/** Run a single T-SQL batch. Opens a fresh connection per call. */
+export const mssqlExecute = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+  sql: string;
+}) => invoke<QueryExecutionResult>("mssql_execute", params);
+
+/** Database list + base tables for the active SQL Server database. */
+export const mssqlOverview = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+}) => invoke<SqlServerOverview>("mssql_overview", params);
+
 /** Socket-CLI Postgres browse — runs the remote host's own `psql` over
  *  SSH as a specific OS user (default `postgres`, Unix-socket **peer**
  *  auth), so the panel browses as superuser with no role password or

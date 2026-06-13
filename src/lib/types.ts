@@ -1097,6 +1097,7 @@ export type RightTool =
   | "git"
   | "monitor"
   | "docker"
+  | "database"
   | "mysql"
   | "redis"
   | "log"
@@ -1108,6 +1109,55 @@ export type RightTool =
   | "firewall"
   | "webserver"
   | "software";
+
+/**
+ * Sub-products that live *inside* the unified `database` right-tool. The
+ * tool strip shows a single "Database" entry; `DatabasePanel` then routes
+ * the active tab's `dbKind` to the matching client panel — mirroring how
+ * the single `webserver` tool switches between nginx / apache / caddy.
+ *
+ * Redis is intentionally NOT here: its key-value browsing model differs
+ * enough from the relational grid that it keeps its own strip entry.
+ */
+export type DbProduct =
+  | "mysql"
+  | "postgres"
+  | "sqlite"
+  | "sqlserver"
+  | "influx";
+
+/** Order shown in the in-panel product switcher. */
+export const DATABASE_TOOL_KINDS: readonly DbProduct[] = [
+  "mysql",
+  "postgres",
+  "sqlite",
+  "sqlserver",
+  "influx",
+];
+
+/** Legacy `RightTool` values that now collapse under the `database`
+ *  umbrella. Persisted tabs and existing entry points (palette, keyboard,
+ *  context menus, detection chips) may still hand us one of these; they
+ *  are normalized to `{ rightTool: "database", dbKind }` at the store
+ *  boundary so the strip only ever sees the umbrella tool. */
+const DB_UMBRELLA_TOOLS = new Set<RightTool>(["mysql", "postgres", "sqlite"]);
+
+export function isDbUmbrellaTool(tool: RightTool): boolean {
+  return DB_UMBRELLA_TOOLS.has(tool);
+}
+
+/** Collapse a raw right-tool selection into the persisted shape. A bare
+ *  relational kind becomes the `database` umbrella tool plus the chosen
+ *  `dbKind`; everything else passes through with `dbKind: null`. */
+export function normalizeRightTool(tool: RightTool): {
+  rightTool: RightTool;
+  dbKind: DbProduct | null;
+} {
+  if (DB_UMBRELLA_TOOLS.has(tool)) {
+    return { rightTool: "database", dbKind: tool as DbProduct };
+  }
+  return { rightTool: tool, dbKind: null };
+}
 
 // ── Tab Model (matches Qt Main.qml tab schema) ─────────────────
 
@@ -1151,6 +1201,10 @@ export type TabState = {
   terminalSessionId: string | null;
   // Right panel tool preference
   rightTool: RightTool;
+  /** Selected product inside the unified `database` tool. Persisted so a
+   *  tab reopens on the same client (MySQL / PostgreSQL / SQLite / …).
+   *  Only meaningful when `rightTool === "database"`. */
+  dbKind: DbProduct;
   // Service context per tab
   redisHost: string;
   redisPort: number;
@@ -1289,6 +1343,7 @@ export const REMOTE_ONLY_TOOLS: ReadonlySet<RightTool> = new Set<RightTool>([
   "log",
   "search",
   "docker",
+  "database",
   "mysql",
   "postgres",
   "redis",

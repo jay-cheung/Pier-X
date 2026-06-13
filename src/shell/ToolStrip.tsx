@@ -39,7 +39,13 @@ export default function ToolStrip({
       {TOOLS.map((entry, i) => {
         const isActive = activeTool === entry.tool;
         const dim = entry.remoteOnly && !hasRemoteContext;
-        const detected = detectedTools?.has(entry.tool) ?? false;
+        // The umbrella "database" button lights up when any relational
+        // product is detected — detection reports per-product tools.
+        const detected =
+          entry.tool === "database"
+            ? (detectedTools?.has("mysql") ?? false) ||
+              (detectedTools?.has("postgres") ?? false)
+            : detectedTools?.has(entry.tool) ?? false;
         const prevCategory = i > 0 ? TOOLS[i - 1].category : null;
         const showDivider =
           prevCategory !== null && prevCategory !== entry.category;

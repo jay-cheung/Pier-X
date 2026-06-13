@@ -57,5 +57,6 @@ pub mod search;
 pub mod server_monitor;
 pub mod sqlite;
 pub mod sqlite_remote;
+pub mod sqlserver;
 pub mod web_server;
 pub mod webhook;

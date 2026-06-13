@@ -111,6 +111,20 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # pure-Rust backend (no zlib system dep).
 mysql_async = { version = "0.36", default-features = false, features = ["minimal-rust"] }
 
+# Microsoft SQL Server (TDS) client for the unified database panel's
+# SQL Server product. `tiberius` is the pure-Rust TDS driver. Built
+# WITHOUT its TLS features — we connect with encryption disabled through
+# the SSH tunnel, same rationale as MySQL/Postgres/Redis. `chrono` +
+# `rust_decimal` let DATETIME / DECIMAL columns stringify properly
+# instead of falling back to a type placeholder.
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "chrono", "rust_decimal"] }
+# Already pulled in by the tiberius features above — declared directly so
+# we can name `chrono::NaiveDateTime` / `rust_decimal::Decimal` when
+# stringifying SQL Server DATETIME / DECIMAL columns. Versions unify with
+# tiberius's, so no extra code lands in the tree.
+chrono = { version = "0.4", default-features = false }
+rust_decimal = { version = "1", default-features = false }
+
 # Async runtime for russh. Only the `rt-multi-thread` + time + net
 # features — we don't need full. `fs` is pulled in for the SFTP
 # upload/download helpers that read/write local files from inside
@@ -124,7 +138,9 @@ tokio = { version = "1", default-features = false, features = [
 # trigger that we hand into `SshSession::exec_command_streaming` so
 # the Software panel can abort an in-flight install without tearing
 # down the whole SSH session.
-tokio-util = { version = "0.7", default-features = false }
+# `compat` bridges tokio's TcpStream into the futures AsyncRead/Write
+# that tiberius expects (`tcp.compat_write()`).
+tokio-util = { version = "0.7", default-features = false, features = ["compat"] }
 
 # Cross-platform process inspection for the SSH watcher: the
 # local terminal's child tree is scanned once per second so the

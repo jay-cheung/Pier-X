@@ -1,11 +1,14 @@
 import {
+  Activity,
   ChartNoAxesCombined,
+  Database,
   FileText,
   FolderSync,
   GitBranch,
   Globe,
   Package,
   Search,
+  Server,
   Shield,
   Sparkles,
 } from "lucide-react";
@@ -16,7 +19,7 @@ import MySqlIcon from "../components/icons/MySqlIcon";
 import PostgresIcon from "../components/icons/PostgresIcon";
 import RedisIcon from "../components/icons/RedisIcon";
 import SqliteIcon from "../components/icons/SqliteIcon";
-import type { RightTool } from "./types";
+import type { DbProduct, RightTool } from "./types";
 
 export type LucideIcon = ComponentType<SVGProps<SVGSVGElement> & { size?: number | string }>;
 
@@ -63,14 +66,15 @@ export type RightToolMeta = {
 //   host       → monitor / firewall       (read-mostly OS-level overviews)
 //   files      → sftp / log               (filesystem + log tails)
 //   containers → docker
-//   database   → mysql / postgres / redis / sqlite
+//   database   → database (mysql / postgres / sqlite / …) · redis
 //   service    → webserver / software     (host-level service management)
 //
 // Within a category, items are ordered by frequency-of-use among the
-// tools that share that category. SQLite, like the other DB clients,
-// targets the *server* — it scans the connected host for `.db` /
-// `.sqlite` files. Without a remote context the strip button is dim,
-// matching mysql / postgres / redis.
+// tools that share that category. The relational clients (MySQL,
+// PostgreSQL, SQLite, SQL Server, …) collapse into ONE `database` strip
+// entry; `DatabasePanel` switches between them in-panel, like the single
+// `webserver` tool switches nginx / apache / caddy. Redis keeps its own
+// entry — its key-value model doesn't share the relational grid UI.
 export const RIGHT_TOOL_ORDER: RightTool[] = [
   "ai",
   "markdown",
@@ -81,10 +85,8 @@ export const RIGHT_TOOL_ORDER: RightTool[] = [
   "log",
   "search",
   "docker",
-  "mysql",
-  "postgres",
+  "database",
   "redis",
-  "sqlite",
   "webserver",
   "software",
 ];
@@ -180,6 +182,21 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     splashTitle: "Docker",
     splashSubtitle: "Pick a host to list containers, images, networks, and compose stacks.",
   },
+  // Unified relational-database tool. The strip shows this single entry;
+  // DatabasePanel routes the tab's `dbKind` to the matching client. The
+  // per-product mysql / postgres / sqlite entries below are retained for
+  // their icons and splash copy (reused by the in-panel switcher and the
+  // credential dialog) but no longer appear in RIGHT_TOOL_ORDER.
+  database: {
+    label: "Database",
+    category: "database",
+    icon: Database,
+    remoteOnly: true,
+    tintVar: "var(--svc-database)",
+    splashTitle: "Database",
+    splashSubtitle:
+      "Connect through SSH to browse MySQL, PostgreSQL, SQLite, SQL Server, and more — switch products in-panel.",
+  },
   mysql: {
     label: "MySQL",
     category: "database",
@@ -235,5 +252,76 @@ export const RIGHT_TOOL_META: Record<RightTool, RightToolMeta> = {
     splashTitle: "Software",
     splashSubtitle:
       "Open an SSH tab to view the host's tool stack and install or update packages with live progress.",
+  },
+};
+
+// ── Database sub-products ───────────────────────────────────────────
+//
+// Drives the in-panel product switcher, the per-product splash, and the
+// add-credential dialog. Adding a new database (Oracle, 达梦 DM, …) means
+// appending an entry here, a `DbKind` member, a client panel, and a
+// pier-core driver — no changes to the strip or routing.
+
+export type DbKindMeta = {
+  label: string;
+  icon: LucideIcon;
+  tintVar: string;
+  splashSubtitle: string;
+  /** Default TCP port shown in the connect form. SQLite has none. */
+  defaultPort: number | null;
+  /** Whether the client browses by schema (PostgreSQL / SQL Server) on
+   *  top of database selection. Lets the switcher pre-flag UI affordances. */
+  hasSchema: boolean;
+  /** False while the backend driver is still landing — the switcher shows
+   *  the product but the panel renders a "coming soon" note instead of a
+   *  broken connect form. */
+  available: boolean;
+};
+
+export const DB_KIND_META: Record<DbProduct, DbKindMeta> = {
+  mysql: {
+    label: "MySQL",
+    icon: MySqlIcon,
+    tintVar: "var(--svc-mysql)",
+    splashSubtitle: "Browse databases, run queries, and edit rows over SSH.",
+    defaultPort: 3306,
+    hasSchema: false,
+    available: true,
+  },
+  postgres: {
+    label: "PostgreSQL",
+    icon: PostgresIcon,
+    tintVar: "var(--svc-postgres)",
+    splashSubtitle: "Explore schemas, tables, and routines, and run SQL over SSH.",
+    defaultPort: 5432,
+    hasSchema: true,
+    available: true,
+  },
+  sqlite: {
+    label: "SQLite",
+    icon: SqliteIcon,
+    tintVar: "var(--svc-sqlite)",
+    splashSubtitle: "Scan a host for .db / .sqlite files and read or edit them.",
+    defaultPort: null,
+    hasSchema: false,
+    available: true,
+  },
+  sqlserver: {
+    label: "SQL Server",
+    icon: Server,
+    tintVar: "var(--svc-sqlserver)",
+    splashSubtitle: "Connect to Microsoft SQL Server to browse schemas and run T-SQL.",
+    defaultPort: 1433,
+    hasSchema: true,
+    available: true,
+  },
+  influx: {
+    label: "InfluxDB",
+    icon: Activity,
+    tintVar: "var(--svc-influx)",
+    splashSubtitle: "Query measurements and buckets on an InfluxDB time-series host.",
+    defaultPort: 8086,
+    hasSchema: false,
+    available: false,
   },
 };

@@ -14,9 +14,7 @@ import PanelSkeleton from "../components/PanelSkeleton";
 
 const AiPanel = lazy(() => import("../panels/AiPanel"));
 const GitPanel = lazy(() => import("../panels/GitPanel"));
-const MySqlPanel = lazy(() => import("../panels/MySqlPanel"));
-const PostgresPanel = lazy(() => import("../panels/PostgresPanel"));
-const SqlitePanel = lazy(() => import("../panels/SqlitePanel"));
+const DatabasePanel = lazy(() => import("../panels/DatabasePanel"));
 const RedisPanel = lazy(() => import("../panels/RedisPanel"));
 const DockerPanel = lazy(() => import("../panels/DockerPanel"));
 const SftpPanel = lazy(() => import("../panels/SftpPanel"));
@@ -47,7 +45,7 @@ type Props = {
 
 type SplashTool = "monitor" | "docker" | "mysql" | "postgres" | "redis" | "log" | "search" | "sftp" | "firewall" | "webserver" | "software";
 
-const DB_DETECTION_TOOLS = new Set<RightTool>(["mysql", "postgres", "redis"]);
+const DB_DETECTION_TOOLS = new Set<RightTool>(["database", "redis"]);
 const SERVICE_DETECTION_DELAY_MS = 2_000;
 const EMPTY_DETECTED_TOOLS = new Set<RightTool>();
 
@@ -114,10 +112,17 @@ function ToolContent({
       return tab ? <DockerPanel key={tab.id} tab={tab} /> : renderSplash("docker", t, onConnectSaved, onNewConnection);
     case "firewall":
       return tab ? <FirewallPanel key={tab.id} tab={tab} isActive={isActive} /> : renderSplash("firewall", t, onConnectSaved, onNewConnection);
-    case "mysql":
-      return tab ? <MySqlPanel key={tab.id} tab={tab} /> : renderSplash("mysql", t, onConnectSaved, onNewConnection);
-    case "postgres":
-      return tab ? <PostgresPanel key={tab.id} tab={tab} /> : renderSplash("postgres", t, onConnectSaved, onNewConnection);
+    case "database":
+      // Unified relational-DB tool: switches MySQL / PostgreSQL / SQLite /
+      // SQL Server / InfluxDB in-panel. Handles its own per-product splash.
+      return (
+        <DatabasePanel
+          key={tabKey}
+          tab={tab}
+          onConnectSaved={onConnectSaved}
+          onNewConnection={onNewConnection}
+        />
+      );
     case "redis":
       return tab ? <RedisPanel key={tab.id} tab={tab} /> : renderSplash("redis", t, onConnectSaved, onNewConnection);
     case "log":
@@ -126,8 +131,6 @@ function ToolContent({
       return tab ? <SftpPanel key={tab.id} tab={tab} /> : renderSplash("sftp", t, onConnectSaved, onNewConnection);
     case "search":
       return tab ? <CodeSearchPanel key={tab.id} tab={tab} /> : renderSplash("search", t, onConnectSaved, onNewConnection);
-    case "sqlite":
-      return <SqlitePanel key={tabKey} tab={tab} />;
     case "webserver":
       return tab ? <WebServerPanel key={tab.id} tab={tab} /> : renderSplash("webserver", t, onConnectSaved, onNewConnection);
     case "software":
@@ -171,7 +174,7 @@ function rightHeaderMeta(
 function lazyFallbackFor(tool: RightTool) {
   if (tool === "markdown") return <PanelSkeleton variant="prose" rows={8} />;
   if (tool === "monitor") return <PanelSkeleton variant="chrome" rows={4} />;
-  if (tool === "mysql" || tool === "postgres" || tool === "redis" || tool === "sqlite") {
+  if (tool === "database" || tool === "redis") {
     return <PanelSkeleton variant="grid" rows={8} />;
   }
   if (tool === "software") return <PanelSkeleton variant="rows" rows={9} />;

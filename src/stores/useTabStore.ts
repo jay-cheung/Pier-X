@@ -3,7 +3,7 @@ import * as cmd from "../lib/shellCommands";
 import { translate } from "../i18n/useI18n";
 import { useSettingsStore } from "./useSettingsStore";
 import type { RightTool, TabState } from "../lib/types";
-import { DEFAULT_LOG_SOURCE, resolveReachableTool } from "../lib/types";
+import { DEFAULT_LOG_SOURCE, normalizeRightTool, resolveReachableTool } from "../lib/types";
 
 type TabStore = {
   tabs: TabState[];
@@ -33,12 +33,17 @@ type PersistedShape = {
 // connections keep `sshSavedConnectionIndex`; the backend pulls the
 // actual password from the OS keyring on reconnect.
 function scrubRuntimeFields(tab: TabState): TabState {
+  // Migrate legacy persisted right tools: the retired `nginx` value folds
+  // into `webserver`; the standalone `mysql` / `postgres` / `sqlite` values
+  // fold into the unified `database` tool, carrying the chosen product over
+  // to `dbKind` (which older snapshots lack).
+  const legacyTool =
+    (tab.rightTool as string) === "nginx" ? "webserver" : tab.rightTool;
+  const migrated = normalizeRightTool(legacyTool);
   const base: TabState = {
     ...tab,
-    rightTool:
-      (tab.rightTool as string) === "nginx"
-        ? "webserver"
-        : tab.rightTool,
+    rightTool: migrated.rightTool,
+    dbKind: tab.dbKind ?? migrated.dbKind ?? "mysql",
     terminalSessionId: null,
     currentShellUser: "",
     sshPassword: "",
@@ -255,6 +260,12 @@ function makeDefaultTab(
   partial: Partial<TabState> & { backend: TabState["backend"] },
 ): TabState {
   const locale = useSettingsStore.getState().locale;
+  // A caller may pass a bare relational kind (e.g. the server context menu's
+  // "Open MySQL") — collapse it into the umbrella tool + dbKind so the strip
+  // only ever stores "database".
+  const requestedTool =
+    partial.rightTool ?? (partial.backend === "local" ? "markdown" : "monitor");
+  const normalized = normalizeRightTool(requestedTool);
   return {
     id: genId(),
     title:
@@ -271,7 +282,8 @@ function makeDefaultTab(
     sshSavedConnectionIndex: partial.sshSavedConnectionIndex ?? null,
     terminalSessionId: partial.terminalSessionId ?? null,
     currentShellUser: partial.currentShellUser ?? "",
-    rightTool: partial.rightTool ?? (partial.backend === "local" ? "markdown" : "monitor"),
+    rightTool: normalized.rightTool,
+    dbKind: partial.dbKind ?? normalized.dbKind ?? "mysql",
     redisHost: partial.redisHost ?? "127.0.0.1",
     redisPort: partial.redisPort ?? 6379,
     redisDb: partial.redisDb ?? 0,
@@ -424,6 +436,9 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   setTabRightTool: (id, tool) => {
-    get().updateTab(id, { rightTool: tool });
+    // A bare relational kind selects the umbrella tool and remembers the
+    // product; everything else passes through untouched (dbKind preserved).
+    const { rightTool, dbKind } = normalizeRightTool(tool);
+    get().updateTab(id, dbKind ? { rightTool, dbKind } : { rightTool });
   },
 }));

@@ -2862,3 +2862,233 @@
 .explain-plan-history__label {
   color: var(--muted);
 }
+
+/* ── Unified database product switcher ──────────────────────────────
+   Single `database` right-tool entry; DatabasePanel renders this strip
+   to swap MySQL / PostgreSQL / SQLite / SQL Server / InfluxDB in-panel,
+   mirroring the web-server product segmented control. */
+.db-stack {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.db-stack__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.db-switcher {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.db-switcher::-webkit-scrollbar {
+  display: none;
+}
+.db-switcher__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: var(--size-micro);
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.db-switcher__btn:hover {
+  color: var(--ink);
+  background: var(--bg-hover);
+}
+.db-switcher__btn.is-active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+.db-switcher__icon {
+  display: inline-flex;
+  color: var(--db-tint, var(--muted));
+}
+.db-switcher__btn.is-active .db-switcher__icon {
+  color: var(--db-tint, var(--accent));
+}
+.db-switcher__label {
+  font-weight: 500;
+}
+.db-switcher__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pos);
+}
+.db-switcher__soon {
+  font-size: var(--size-micro);
+  color: var(--muted);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+}
+.db-switcher__btn--soon {
+  opacity: 0.7;
+}
+
+/* ── SQL Server panel (functional v1) ───────────────────────────────
+   Direct-connect form + table list + T-SQL editor + result table.
+   Not yet on the shared credential/tunnel flow — see SqlServerPanel. */
+.mssql-connect {
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--sp-6) var(--sp-4);
+  overflow-y: auto;
+}
+.mssql-connect__card {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.mssql-connect__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--ui-fs-lg);
+  color: var(--ink);
+}
+.mssql-connect__sub {
+  font-size: var(--ui-fs-sm);
+  color: var(--muted);
+}
+.mssql-connect__hint {
+  font-size: var(--size-micro);
+  color: var(--dim);
+  line-height: 1.4;
+}
+.mssql-form {
+  display: grid;
+  grid-template-columns: 1fr 88px;
+  gap: var(--sp-2) var(--sp-2);
+}
+.mssql-form .field {
+  grid-column: 1 / -1;
+}
+.mssql-form .field:nth-child(1) {
+  grid-column: 1 / 2;
+}
+.mssql-form__port {
+  grid-column: 2 / 3 !important;
+}
+.mssql-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.mssql-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.mssql-side {
+  width: 200px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.mssql-side__db {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+.mssql-side__tables {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-1);
+}
+.mssql-table-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  width: 100%;
+  padding: 3px var(--sp-2);
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  font-size: var(--size-micro);
+  text-align: left;
+}
+.mssql-table-row:hover {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+.mssql-table-row__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mssql-table-row__schema {
+  color: var(--dim);
+  font-size: var(--size-micro);
+}
+.mssql-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.mssql-editor {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+.mssql-editor__ta {
+  resize: vertical;
+  height: 120px;
+  min-height: 64px;
+  border: none;
+  background: var(--surface);
+  color: var(--ink);
+  padding: var(--sp-2);
+  font-size: var(--ui-fs-sm);
+  outline: none;
+}
+.mssql-editor__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--panel);
+}
+.mssql-editor__hint {
+  font-size: var(--size-micro);
+  color: var(--dim);
+}
+.mssql-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.mssql-results__foot {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}

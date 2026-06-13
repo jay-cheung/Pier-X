@@ -21,6 +21,7 @@ use pier_core::services::redis::{RedisClient, RedisConfig};
 use pier_core::services::server_monitor;
 use pier_core::services::sqlite::SqliteClient;
 use pier_core::services::sqlite_remote;
+use pier_core::services::sqlserver::{SqlServerClient, SqlServerConfig};
 use pier_core::services::web_server;
 use pier_core::ssh::config::{DbCredential, DbCredentialSource, DbKind};
 use pier_core::ssh::db_detect::{self, DbDetectionReport, DetectedDbInstance};
@@ -7324,6 +7325,104 @@ async fn postgres_execute(
     })
     .await
     .map_err(|e| format!("postgres_execute join: {e}"))?
+}
+
+/// Default SQL Server port when the caller passes 0.
+fn normalize_sqlserver_port(port: u16) -> u16 {
+    if port == 0 {
+        1433
+    } else {
+        port
+    }
+}
+
+fn map_sqlserver_query_result(
+    result: pier_core::services::sqlserver::QueryResult,
+) -> QueryExecutionResult {
+    QueryExecutionResult {
+        columns: result.columns,
+        rows: result
+            .rows
+            .into_iter()
+            .map(|row| row.into_iter().map(|cell| cell.unwrap_or_default()).collect())
+            .collect(),
+        truncated: result.truncated,
+        affected_rows: result.affected_rows,
+        last_insert_id: result.last_insert_id,
+        elapsed_ms: result.elapsed_ms,
+    }
+}
+
+/// Database + base-table snapshot for the SQL Server panel sidebar.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlServerOverview {
+    databases: Vec<String>,
+    current_database: String,
+    tables: Vec<pier_core::services::sqlserver::TableRef>,
+}
+
+/// Run a single T-SQL batch against SQL Server. Each call opens a fresh
+/// connection — the panel is stateless between queries, mirroring the
+/// PostgreSQL panel. Connects with TLS disabled (tunnel-encrypted).
+#[tauri::command]
+async fn mssql_execute(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    sql: String,
+) -> Result<QueryExecutionResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
+            host: host.trim().to_string(),
+            port: normalize_sqlserver_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+
+        let result = client.execute_blocking(&sql).map_err(|e| e.to_string())?;
+        Ok(map_sqlserver_query_result(result))
+    })
+    .await
+    .map_err(|e| format!("mssql_execute join: {e}"))?
+}
+
+/// Database list + base tables for the active SQL Server database.
+#[tauri::command]
+async fn mssql_overview(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+) -> Result<SqlServerOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
+            host: host.trim().to_string(),
+            port: normalize_sqlserver_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+
+        let databases = client.list_databases_blocking().map_err(|e| e.to_string())?;
+        let current_database = client
+            .current_database_blocking()
+            .map_err(|e| e.to_string())?;
+        let tables = client.list_tables_blocking().map_err(|e| e.to_string())?;
+        Ok(SqlServerOverview {
+            databases,
+            current_database,
+            tables,
+        })
+    })
+    .await
+    .map_err(|e| format!("mssql_overview join: {e}"))?
 }
 
 /// Snapshot of `pg_stat_activity`. Each call opens a fresh connection
@@ -18612,6 +18711,8 @@ pub fn run() {
             mysql_execute_socket,
             postgres_browse_socket,
             postgres_execute_socket,
+            mssql_execute,
+            mssql_overview,
             mysql_list_processes,
             mysql_kill_query,
             mysql_kill_connection,

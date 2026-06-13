@@ -78,8 +78,11 @@
 
   /* ── Service brand tints (sidebar service chips, tool rail) */
   --svc-docker: #4aa3ff;
+  --svc-database: #46c0c9;
   --svc-mysql: #f29d49;
   --svc-postgres: #8fb3ff;
+  --svc-sqlserver: #e06c5d;
+  --svc-influx: #d65db1;
   --svc-redis: #e5484d;
   --svc-monitor: #3dd68c;
   --svc-log: #b48cff;
