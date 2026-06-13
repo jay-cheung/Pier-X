@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Bump Pier-X version across the frontend, the Tauri config, and both
-// Cargo manifests. Optionally stages, commits, and pushes the change.
+// Bump Pier-X version across the frontend, the Tauri config, both Cargo
+// manifests, and the workspace-member entries in Cargo.lock. Optionally
+// stages, commits, and pushes the change.
 //
 // The release workflow (`.github/workflows/release.yml`) detects version
 // changes in `package.json` on push to `main` and creates the matching
@@ -41,6 +42,11 @@ const TARGETS = [
   {
     path: resolve(repoRoot, "pier-core/Cargo.toml"),
     kind: "cargo",
+  },
+  {
+    path: resolve(repoRoot, "Cargo.lock"),
+    kind: "cargo-lock",
+    packages: ["pierx", "pier-core"],
   },
 ];
 
@@ -126,6 +132,21 @@ function updateCargo(target, next) {
   writeFileSync(target.path, raw.replace(section, updatedSection));
 }
 
+function updateCargoLock(target, next) {
+  const raw = readFileSync(target.path, "utf8");
+  let updated = raw;
+  for (const name of target.packages) {
+    // In a [[package]] block the version line immediately follows the name
+    // line, which keeps this from touching same-named external crates.
+    const re = new RegExp(`(^name = "${name}"\\nversion = ")[^"]+("$)`, "m");
+    if (!re.test(updated)) {
+      die(`${target.path} has no package block for "${name}"`);
+    }
+    updated = updated.replace(re, `$1${next}$2`);
+  }
+  writeFileSync(target.path, updated);
+}
+
 function runGit(cmd, dryRun) {
   if (dryRun) {
     console.log(`[dry-run] ${cmd}`);
@@ -145,6 +166,7 @@ function main() {
     console.log(`  update ${t.path}`);
     if (flags.dryRun) continue;
     if (t.kind === "json") updateJson(t, next);
+    else if (t.kind === "cargo-lock") updateCargoLock(t, next);
     else updateCargo(t, next);
   }
 
