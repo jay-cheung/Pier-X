@@ -3007,6 +3007,7 @@ fn db_kind_str(k: DbKind) -> &'static str {
         DbKind::Postgres => "postgres",
         DbKind::Redis => "redis",
         DbKind::Sqlite => "sqlite",
+        DbKind::Sqlserver => "sqlserver",
     }
 }
 
@@ -3016,6 +3017,7 @@ fn parse_db_kind(s: &str) -> Result<DbKind, String> {
         "postgres" | "postgresql" => Ok(DbKind::Postgres),
         "redis" => Ok(DbKind::Redis),
         "sqlite" => Ok(DbKind::Sqlite),
+        "sqlserver" | "mssql" => Ok(DbKind::Sqlserver),
         other => Err(format!("unknown db kind: {other}")),
     }
 }
@@ -7423,6 +7425,57 @@ async fn mssql_overview(
     })
     .await
     .map_err(|e| format!("mssql_overview join: {e}"))?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SqlServerColumnView {
+    name: String,
+    column_type: String,
+    nullable: bool,
+    key: String,
+    default_value: String,
+    extra: String,
+}
+
+/// Column metadata for one SQL Server table (structure view).
+#[tauri::command]
+async fn mssql_columns(
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: Option<String>,
+    schema: String,
+    table: String,
+) -> Result<Vec<SqlServerColumnView>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut client = SqlServerClient::connect_blocking(SqlServerConfig {
+            host: host.trim().to_string(),
+            port: normalize_sqlserver_port(port),
+            user: user.trim().to_string(),
+            password,
+            database: database.filter(|v| !v.trim().is_empty()),
+        })
+        .map_err(|e| e.to_string())?;
+
+        let cols = client
+            .list_columns_blocking(schema.trim(), table.trim())
+            .map_err(|e| e.to_string())?;
+        Ok(cols
+            .into_iter()
+            .map(|c| SqlServerColumnView {
+                name: c.name,
+                column_type: c.column_type,
+                nullable: c.nullable,
+                key: c.key,
+                default_value: c.default_value.unwrap_or_default(),
+                extra: c.extra,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("mssql_columns join: {e}"))?
 }
 
 /// Snapshot of `pg_stat_activity`. Each call opens a fresh connection
@@ -18713,6 +18766,7 @@ pub fn run() {
             postgres_execute_socket,
             mssql_execute,
             mssql_overview,
+            mssql_columns,
             mysql_list_processes,
             mysql_kill_query,
             mysql_kill_connection,

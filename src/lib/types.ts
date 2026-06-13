@@ -1232,6 +1232,10 @@ export type TabState = {
   pgDatabase: string;
   pgTunnelId: string | null;
   pgTunnelPort: number | null;
+  /** SQL Server SSH-tunnel handle for this tab (slot "sqlserver").
+   *  Cleared on rehydrate like the other tunnel slots. */
+  mssqlTunnelId: string | null;
+  mssqlTunnelPort: number | null;
   /** When set, points at a `SavedSshConnection.databases[]`
    *  entry of the matching kind. Drives the instance picker
    *  pill-bar selection and the auto-browse effect on saved

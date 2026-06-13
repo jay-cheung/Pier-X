@@ -3092,3 +3092,26 @@
   color: var(--muted);
   border-top: 1px solid var(--line);
 }
+
+/* SQL Server: active table row + column metadata block */
+.mssql-table-row.is-active {
+  background: var(--accent-subtle);
+  color: var(--accent-hover);
+}
+.mssql-cols {
+  border-bottom: 1px solid var(--line);
+  max-height: 200px;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.mssql-cols__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--size-micro);
+  color: var(--muted);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+}

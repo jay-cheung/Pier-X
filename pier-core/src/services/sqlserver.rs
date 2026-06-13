@@ -99,6 +99,29 @@ pub struct TableRef {
     pub name: String,
 }
 
+/// Column metadata for the structure view. Same field names as
+/// [`super::postgres::ColumnInfo`] so the shared grid binds identically.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    /// Column name.
+    pub name: String,
+    /// Data type, e.g. `int`, `nvarchar(50)`.
+    pub column_type: String,
+    /// True if the column accepts NULL.
+    pub nullable: bool,
+    /// `PRI` when part of the primary key, else empty.
+    pub key: String,
+    /// Column default expression.
+    pub default_value: Option<String>,
+    /// Identity / computed markers.
+    pub extra: String,
+}
+
+/// Escape a value for inlining inside a T-SQL single-quoted string literal.
+fn esc_lit(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 /// SQL Server client handle over one live TDS connection.
 pub struct SqlServerClient {
     client: Client<Compat<TcpStream>>,
@@ -264,6 +287,110 @@ impl SqlServerClient {
     /// Blocking wrapper for [`Self::current_database`].
     pub fn current_database_blocking(&mut self) -> Result<String> {
         crate::ssh::runtime::shared().block_on(self.current_database())
+    }
+
+    /// User schemas in the active database (dbo-owned; excludes the
+    /// fixed role schemas like `db_datareader`).
+    pub async fn list_schemas(&mut self) -> Result<Vec<String>> {
+        let rows = self
+            .client
+            .simple_query("SELECT name FROM sys.schemas WHERE principal_id = 1 ORDER BY name")
+            .await?
+            .into_first_result()
+            .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.try_get::<&str, _>(0).ok().flatten().map(str::to_string))
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_schemas`].
+    pub fn list_schemas_blocking(&mut self) -> Result<Vec<String>> {
+        crate::ssh::runtime::shared().block_on(self.list_schemas())
+    }
+
+    /// Column metadata for one table, with primary-key columns marked
+    /// `PRI`. Fail-softs the PK lookup to empty so a low-privilege role
+    /// still gets the column list.
+    pub async fn list_columns(&mut self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+        let (s, t) = (esc_lit(schema), esc_lit(table));
+
+        // Primary-key columns first (best-effort).
+        let pk_sql = format!(
+            "SELECT ku.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
+             JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku \
+               ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME \
+              AND tc.TABLE_SCHEMA = ku.TABLE_SCHEMA \
+             WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY' \
+               AND tc.TABLE_SCHEMA = '{s}' AND tc.TABLE_NAME = '{t}'"
+        );
+        let pk: std::collections::BTreeSet<String> = match self
+            .client
+            .simple_query(pk_sql)
+            .await
+        {
+            Ok(stream) => stream
+                .into_first_result()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| r.try_get::<&str, _>(0).ok().flatten().map(str::to_string))
+                .collect(),
+            Err(_) => std::collections::BTreeSet::new(),
+        };
+
+        let col_sql = format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT, \
+                    COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)), COLUMN_NAME, 'IsIdentity') AS is_identity \
+             FROM INFORMATION_SCHEMA.COLUMNS \
+             WHERE TABLE_SCHEMA = '{s}' AND TABLE_NAME = '{t}' \
+             ORDER BY ORDINAL_POSITION"
+        );
+        let rows = self
+            .client
+            .simple_query(col_sql)
+            .await?
+            .into_first_result()
+            .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| {
+                let name = r.try_get::<&str, _>(0).ok().flatten().unwrap_or_default().to_string();
+                let base_type = r.try_get::<&str, _>(1).ok().flatten().unwrap_or_default();
+                let max_len = r.try_get::<i32, _>(2).ok().flatten();
+                let column_type = match max_len {
+                    Some(-1) => format!("{base_type}(max)"),
+                    Some(n) if n > 0 => format!("{base_type}({n})"),
+                    _ => base_type.to_string(),
+                };
+                let nullable = r
+                    .try_get::<&str, _>(3)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.eq_ignore_ascii_case("YES"))
+                    .unwrap_or(true);
+                let default_value = r
+                    .try_get::<&str, _>(4)
+                    .ok()
+                    .flatten()
+                    .map(str::to_string);
+                let is_identity = r.try_get::<i32, _>(5).ok().flatten().unwrap_or(0) == 1;
+                ColumnInfo {
+                    key: if pk.contains(&name) { "PRI".to_string() } else { String::new() },
+                    name,
+                    column_type,
+                    nullable,
+                    default_value,
+                    extra: if is_identity { "IDENTITY".to_string() } else { String::new() },
+                }
+            })
+            .collect())
+    }
+
+    /// Blocking wrapper for [`Self::list_columns`].
+    pub fn list_columns_blocking(&mut self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+        crate::ssh::runtime::shared().block_on(self.list_columns(schema, table))
     }
 }
 

@@ -1,21 +1,23 @@
 import { useMemo, useState } from "react";
-import { Play, Plug, RefreshCw, Table2, Unplug } from "lucide-react";
+import { Columns3, Play, Plug, RefreshCw, Table2, Unplug } from "lucide-react";
 import type { QueryExecutionResult, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import * as cmd from "../lib/commands";
-import type { SqlServerOverview } from "../lib/commands";
+import type { SqlServerColumnView, SqlServerOverview } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { DB_KIND_META } from "../lib/rightToolMeta";
+import { ensureTunnelSlot, closeTunnelSlot } from "../lib/sshTunnel";
+import { useTabStore } from "../stores/useTabStore";
 import Select from "../components/Select";
 import PanelHeader from "../components/PanelHeader";
 
-// Functional v1 SQL Server client. Unlike the MySQL / PostgreSQL panels
-// it is not yet wired into the saved-credential / SSH-tunnel flow — it
-// connects directly to the entered host:port (default the tab's SSH host
-// on 1433). Saved-credential + auto-tunnel integration, schema tree, and
-// inline grid editing are tracked follow-ups; this covers connect →
-// browse tables → run T-SQL → view results end-to-end.
+// SQL Server client. Connects through the tab's SSH tunnel (slot
+// "sqlserver", like MySQL / PostgreSQL): the form host/port is the
+// address as seen FROM the SSH host (default 127.0.0.1:1433); a local
+// forward is opened and the TDS connection rides 127.0.0.1:<localPort>.
+// TLS is off (tunnel-encrypted). Saved-credential persistence and
+// structure/grid editing are tracked follow-ups.
 
 type Props = { tab: TabState | null };
 
@@ -40,7 +42,7 @@ export default function SqlServerPanel({ tab }: Props) {
 
   const [form, setForm] = useState<Form>(() => {
     const def: Form = {
-      host: sshHost || "127.0.0.1",
+      host: "127.0.0.1",
       port: "1433",
       user: "sa",
       password: "",
@@ -57,16 +59,11 @@ export default function SqlServerPanel({ tab }: Props) {
 
   const [overview, setOverview] = useState<SqlServerOverview | null>(null);
   const [results, setResults] = useState<QueryExecutionResult | null>(null);
+  const [columns, setColumns] = useState<SqlServerColumnView[] | null>(null);
+  const [selected, setSelected] = useState<string>("");
   const [sql, setSql] = useState("SELECT @@VERSION;");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-
-  const baseParams = () => ({
-    host: form.host.trim(),
-    port: Number.parseInt(form.port, 10) || 1433,
-    user: form.user.trim(),
-    password: form.password,
-  });
 
   const persist = (f: Form) => {
     try {
@@ -82,12 +79,34 @@ export default function SqlServerPanel({ tab }: Props) {
   const setField = (k: keyof Form, v: string) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  // Resolve the actual TDS endpoint: through the SSH tunnel when the tab
+  // has an SSH context, else direct to the entered address.
+  async function resolveTarget(): Promise<{ host: string; port: number }> {
+    const remotePort = Number.parseInt(form.port, 10) || 1433;
+    const remoteHost = form.host.trim() || "127.0.0.1";
+    if (tab && effectiveSshTarget(tab)) {
+      const info = await ensureTunnelSlot({
+        tab,
+        slot: "sqlserver",
+        remoteHost,
+        remotePort,
+        updateTab: useTabStore.getState().updateTab,
+      });
+      return { host: "127.0.0.1", port: info.localPort };
+    }
+    return { host: remoteHost, port: remotePort };
+  }
+
+  const auth = () => ({ user: form.user.trim(), password: form.password });
+
   async function connect(database?: string) {
     setBusy(true);
     setError("");
     try {
+      const tgt = await resolveTarget();
       const ov = await cmd.mssqlOverview({
-        ...baseParams(),
+        ...tgt,
+        ...auth(),
         database: database ?? (form.database.trim() || null),
       });
       setOverview(ov);
@@ -110,7 +129,10 @@ export default function SqlServerPanel({ tab }: Props) {
     setBusy(true);
     setError("");
     try {
-      setResults(await cmd.mssqlExecute({ ...baseParams(), database: form.database.trim() || null, sql: q }));
+      const tgt = await resolveTarget();
+      setResults(
+        await cmd.mssqlExecute({ ...tgt, ...auth(), database: form.database.trim() || null, sql: q }),
+      );
     } catch (e) {
       setError(fmt(e));
     } finally {
@@ -118,15 +140,37 @@ export default function SqlServerPanel({ tab }: Props) {
     }
   }
 
-  function openTable(schema: string, name: string) {
+  async function openTable(schema: string, name: string) {
+    const key = `${schema}.${name}`;
+    setSelected(key);
     const q = `SELECT TOP 100 * FROM [${schema}].[${name}];`;
     setSql(q);
-    void run(q);
+    setBusy(true);
+    setError("");
+    try {
+      const tgt = await resolveTarget();
+      const db = form.database.trim() || null;
+      const [cols, rows] = await Promise.all([
+        cmd.mssqlColumns({ ...tgt, ...auth(), database: db, schema, table: name }),
+        cmd.mssqlExecute({ ...tgt, ...auth(), database: db, sql: q }),
+      ]);
+      setColumns(cols);
+      setResults(rows);
+    } catch (e) {
+      setError(fmt(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function disconnect() {
+  async function disconnect() {
+    if (tab) {
+      await closeTunnelSlot(tab, "sqlserver", useTabStore.getState().updateTab).catch(() => {});
+    }
     setOverview(null);
     setResults(null);
+    setColumns(null);
+    setSelected("");
     setError("");
   }
 
@@ -204,7 +248,9 @@ export default function SqlServerPanel({ tab }: Props) {
           </button>
           {error && <div className="status-note mono status-note--error">{error}</div>}
           <div className="mssql-connect__hint">
-            {t("Connects directly to the address above (TLS off). For tunnel-only hosts, forward the port and use 127.0.0.1.")}
+            {tab && effectiveSshTarget(tab)
+              ? t("Connects via the SSH tunnel — host/port are as seen from the SSH host.")
+              : t("Connects directly to the address above (TLS off).")}
           </div>
         </div>
       </div>
@@ -233,7 +279,7 @@ export default function SqlServerPanel({ tab }: Props) {
               type="button"
               className="btn is-ghost is-compact"
               title={t("Disconnect")}
-              onClick={disconnect}
+              onClick={() => void disconnect()}
             >
               <Unplug size={11} />
             </button>
@@ -247,6 +293,8 @@ export default function SqlServerPanel({ tab }: Props) {
               value={form.database}
               onChange={(v) => {
                 setField("database", v);
+                setColumns(null);
+                setSelected("");
                 void connect(v);
               }}
               items={dbOptions}
@@ -257,19 +305,22 @@ export default function SqlServerPanel({ tab }: Props) {
             {overview.tables.length === 0 && (
               <div className="empty-note">{t("No tables.")}</div>
             )}
-            {overview.tables.map((tbl) => (
-              <button
-                key={`${tbl.schema}.${tbl.name}`}
-                type="button"
-                className="mssql-table-row mono"
-                title={`${tbl.schema}.${tbl.name}`}
-                onClick={() => openTable(tbl.schema, tbl.name)}
-              >
-                <Table2 size={11} />
-                <span className="mssql-table-row__name">{tbl.name}</span>
-                <span className="mssql-table-row__schema">{tbl.schema}</span>
-              </button>
-            ))}
+            {overview.tables.map((tbl) => {
+              const key = `${tbl.schema}.${tbl.name}`;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={"mssql-table-row mono" + (key === selected ? " is-active" : "")}
+                  title={key}
+                  onClick={() => void openTable(tbl.schema, tbl.name)}
+                >
+                  <Table2 size={11} />
+                  <span className="mssql-table-row__name">{tbl.name}</span>
+                  <span className="mssql-table-row__schema">{tbl.schema}</span>
+                </button>
+              );
+            })}
           </div>
         </aside>
         <section className="mssql-main">
@@ -299,6 +350,39 @@ export default function SqlServerPanel({ tab }: Props) {
               {error && <span className="status-note mono status-note--error">{error}</span>}
             </div>
           </div>
+          {columns && (
+            <div className="mssql-cols">
+              <div className="mssql-cols__head mono">
+                <Columns3 size={11} /> {selected}
+              </div>
+              <div className="data-table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>{t("Column")}</th>
+                      <th>{t("Type")}</th>
+                      <th>{t("Null")}</th>
+                      <th>{t("Key")}</th>
+                      <th>{t("Default")}</th>
+                      <th>{t("Extra")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {columns.map((c) => (
+                      <tr key={c.name}>
+                        <td className="mono">{c.name}</td>
+                        <td className="mono">{c.columnType}</td>
+                        <td>{c.nullable ? "YES" : "NO"}</td>
+                        <td>{c.key}</td>
+                        <td className="mono">{c.defaultValue}</td>
+                        <td>{c.extra}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           <div className="mssql-results">
             {results ? (
               <div className="data-table-wrap ux-selectable">

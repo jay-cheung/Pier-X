@@ -235,6 +235,8 @@ pub enum DbKind {
     Redis,
     /// Local or remote SQLite `.db` file.
     Sqlite,
+    /// Microsoft SQL Server (1433).
+    Sqlserver,
 }
 
 /// How the password for a DB credential is stored.

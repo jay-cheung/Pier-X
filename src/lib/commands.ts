@@ -1137,6 +1137,26 @@ export const mssqlOverview = (params: {
   database?: string | null;
 }) => invoke<SqlServerOverview>("mssql_overview", params);
 
+export type SqlServerColumnView = {
+  name: string;
+  columnType: string;
+  nullable: boolean;
+  key: string;
+  defaultValue: string;
+  extra: string;
+};
+
+/** Column metadata for one SQL Server table. */
+export const mssqlColumns = (params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database?: string | null;
+  schema: string;
+  table: string;
+}) => invoke<SqlServerColumnView[]>("mssql_columns", params);
+
 /** Socket-CLI Postgres browse — runs the remote host's own `psql` over
  *  SSH as a specific OS user (default `postgres`, Unix-socket **peer**
  *  auth), so the panel browses as superuser with no role password or

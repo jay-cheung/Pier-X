@@ -62,6 +62,8 @@ function scrubRuntimeFields(tab: TabState): TabState {
     pgPassword: "",
     pgTunnelId: null,
     pgTunnelPort: null,
+    mssqlTunnelId: null,
+    mssqlTunnelPort: null,
   };
 
   // For a local-backend tab the `ssh*` fields are NOT the tab's
@@ -305,6 +307,8 @@ function makeDefaultTab(
     pgDatabase: partial.pgDatabase ?? "",
     pgTunnelId: partial.pgTunnelId ?? null,
     pgTunnelPort: partial.pgTunnelPort ?? null,
+    mssqlTunnelId: partial.mssqlTunnelId ?? null,
+    mssqlTunnelPort: partial.mssqlTunnelPort ?? null,
     mysqlActiveCredentialId: partial.mysqlActiveCredentialId ?? null,
     pgActiveCredentialId: partial.pgActiveCredentialId ?? null,
     redisActiveCredentialId: partial.redisActiveCredentialId ?? null,
