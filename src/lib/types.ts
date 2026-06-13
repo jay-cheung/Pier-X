@@ -333,7 +333,15 @@ export type EgressProfile = {
 
 // ── DB Credentials (persisted with SSH profile) ────────────────
 
-export type DbKind = "mysql" | "postgres" | "redis" | "sqlite";
+export type DbKind =
+  | "mysql"
+  | "postgres"
+  | "redis"
+  | "sqlite"
+  | "sqlserver"
+  | "influx"
+  | "oracle"
+  | "dameng";
 
 export type DbCredentialSource =
   | { kind: "manual" }
@@ -1236,13 +1244,37 @@ export type TabState = {
   pgDatabase: string;
   pgTunnelId: string | null;
   pgTunnelPort: number | null;
-  /** SQL Server SSH-tunnel handle for this tab (slot "sqlserver").
-   *  Cleared on rehydrate like the other tunnel slots. */
+  // SQL Server connection (tunnel slot "sqlserver").
+  mssqlHost: string;
+  mssqlPort: number;
+  mssqlUser: string;
+  mssqlPassword: string;
+  mssqlDatabase: string;
   mssqlTunnelId: string | null;
   mssqlTunnelPort: number | null;
-  /** InfluxDB SSH-tunnel handle for this tab (slot "influx"). */
+  // InfluxDB connection (tunnel slot "influx"). `influxToken` carries the
+  // 2.x API token; `influxPassword` the 1.x password. The keyring secret
+  // maps to whichever the saved credential uses (token when user empty).
+  influxHost: string;
+  influxPort: number;
+  influxUser: string;
+  influxPassword: string;
+  influxToken: string;
+  influxDatabase: string;
   influxTunnelId: string | null;
   influxTunnelPort: number | null;
+  // Oracle connection (remote CLI, no tunnel). `oracleService` = service
+  // name / SID, persisted in the credential's `database` slot.
+  oracleHost: string;
+  oraclePort: number;
+  oracleUser: string;
+  oraclePassword: string;
+  oracleService: string;
+  // Dameng connection (remote CLI, no tunnel).
+  damengHost: string;
+  damengPort: number;
+  damengUser: string;
+  damengPassword: string;
   /** When set, points at a `SavedSshConnection.databases[]`
    *  entry of the matching kind. Drives the instance picker
    *  pill-bar selection and the auto-browse effect on saved
@@ -1251,6 +1283,10 @@ export type TabState = {
   pgActiveCredentialId: string | null;
   redisActiveCredentialId: string | null;
   sqliteActiveCredentialId: string | null;
+  mssqlActiveCredentialId: string | null;
+  influxActiveCredentialId: string | null;
+  oracleActiveCredentialId: string | null;
+  damengActiveCredentialId: string | null;
   logCommand: string;
   logSource: LogSource;
   /** User-pinned alternate log sources for this tab, rendered as a

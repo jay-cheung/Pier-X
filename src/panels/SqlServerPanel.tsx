@@ -1,120 +1,128 @@
-import { useMemo, useState } from "react";
-import { Columns3, Play, Plug, RefreshCw, Table2, Unplug } from "lucide-react";
+import { useRef, useState } from "react";
+import { Columns3, Play, RefreshCw, Table2, Unplug } from "lucide-react";
 import type { QueryExecutionResult, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
 import * as cmd from "../lib/commands";
 import type { SqlServerColumnView, SqlServerOverview } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { DB_KIND_META } from "../lib/rightToolMeta";
-import { ensureTunnelSlot, closeTunnelSlot } from "../lib/sshTunnel";
 import { useTabStore } from "../stores/useTabStore";
-import Select from "../components/Select";
+import {
+  useDbCredentialFlow,
+  type DbCredentialFieldAdapter,
+} from "../components/db/useDbCredentialFlow";
+import { inferEnv } from "../components/db/dbTheme";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import DbAddCredentialDialog, {
+  type DbConnectionDraft,
+} from "../components/DbAddCredentialDialog";
 import PanelHeader from "../components/PanelHeader";
+import Select from "../components/Select";
 
-// SQL Server client. Connects through the tab's SSH tunnel (slot
-// "sqlserver", like MySQL / PostgreSQL): the form host/port is the
-// address as seen FROM the SSH host (default 127.0.0.1:1433); a local
-// forward is opened and the TDS connection rides 127.0.0.1:<localPort>.
-// TLS is off (tunnel-encrypted). Saved-credential persistence and
-// structure/grid editing are tracked follow-ups.
+// SQL Server client, fully aligned with MySQL/PG: saved credentials in
+// the keyring, the shared connect splash, and the SSH tunnel (slot
+// "sqlserver"). The connected view is a lean tables + columns + T-SQL
+// editor. TLS is off (tunnel-encrypted); see pier-core/services/sqlserver.
 
 type Props = { tab: TabState | null };
 
-type Form = {
-  host: string;
-  port: string;
-  user: string;
-  password: string;
-  database: string;
-};
-
 const META = DB_KIND_META.sqlserver;
 
-function storageKey(host: string) {
-  return `pier-x:mssql:${host || "local"}`;
-}
+const SQLSERVER_ADAPTER: DbCredentialFieldAdapter = {
+  readHost: (t) => t.mssqlHost,
+  readPort: (t) => t.mssqlPort,
+  readUser: (t) => t.mssqlUser,
+  readPassword: (t) => t.mssqlPassword,
+  readActiveCredId: (t) => t.mssqlActiveCredentialId,
+  readTunnelId: (t) => t.mssqlTunnelId,
+  readTunnelPort: (t) => t.mssqlTunnelPort,
+  patchFromCred: (cred) => ({
+    mssqlActiveCredentialId: cred.id,
+    mssqlHost: cred.host,
+    mssqlPort: cred.port,
+    mssqlUser: cred.user,
+    mssqlPassword: "",
+    mssqlDatabase: cred.database ?? "",
+    mssqlTunnelId: null,
+    mssqlTunnelPort: null,
+  }),
+  patchFromSaved: (cred) => ({
+    mssqlActiveCredentialId: cred.id,
+    mssqlHost: cred.host,
+    mssqlPort: cred.port,
+    mssqlUser: cred.user,
+    mssqlDatabase: cred.database ?? "",
+    mssqlTunnelId: null,
+    mssqlTunnelPort: null,
+  }),
+  patchFromDraft: (draft) => ({
+    mssqlActiveCredentialId: null,
+    mssqlHost: draft.host,
+    mssqlPort: draft.port,
+    mssqlUser: draft.user,
+    mssqlPassword: draft.password,
+    mssqlDatabase: draft.database ?? "",
+    mssqlTunnelId: null,
+    mssqlTunnelPort: null,
+  }),
+  patchPassword: (password) => ({ mssqlPassword: password }),
+  patchPasswordAfterRotate: (password) => ({ mssqlPassword: password }),
+};
 
 export default function SqlServerPanel({ tab }: Props) {
   const { t } = useI18n();
-  const fmt = (e: unknown) => localizeError(e, t);
-  const sshHost = tab ? effectiveSshTarget(tab)?.host ?? "" : "";
+  if (!tab) {
+    return (
+      <div className="panel-section panel-section--empty">
+        <div className="status-note mono">{t("Open an SSH tab to connect to a database.")}</div>
+      </div>
+    );
+  }
+  return <SqlServerBody tab={tab} />;
+}
 
-  const [form, setForm] = useState<Form>(() => {
-    const def: Form = {
-      host: "127.0.0.1",
-      port: "1433",
-      user: "sa",
-      password: "",
-      database: "",
-    };
-    try {
-      const raw = localStorage.getItem(storageKey(sshHost));
-      if (raw) return { ...def, ...JSON.parse(raw), password: "" };
-    } catch {
-      /* ignore malformed cache */
-    }
-    return def;
-  });
+function SqlServerBody({ tab }: { tab: TabState }) {
+  const { t } = useI18n();
+  const fmt = (e: unknown) => localizeError(e, t);
+  const updateTab = useTabStore((s) => s.updateTab);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const [overview, setOverview] = useState<SqlServerOverview | null>(null);
   const [results, setResults] = useState<QueryExecutionResult | null>(null);
   const [columns, setColumns] = useState<SqlServerColumnView[] | null>(null);
-  const [selected, setSelected] = useState<string>("");
+  const [selected, setSelected] = useState("");
   const [sql, setSql] = useState("SELECT @@VERSION;");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const persist = (f: Form) => {
-    try {
-      localStorage.setItem(
-        storageKey(sshHost),
-        JSON.stringify({ host: f.host, port: f.port, user: f.user, database: f.database }),
-      );
-    } catch {
-      /* best-effort */
-    }
-  };
-
-  const setField = (k: keyof Form, v: string) =>
-    setForm((f) => ({ ...f, [k]: v }));
-
-  // Resolve the actual TDS endpoint: through the SSH tunnel when the tab
-  // has an SSH context, else direct to the entered address.
-  async function resolveTarget(): Promise<{ host: string; port: number }> {
-    const remotePort = Number.parseInt(form.port, 10) || 1433;
-    const remoteHost = form.host.trim() || "127.0.0.1";
-    if (tab && effectiveSshTarget(tab)) {
-      const info = await ensureTunnelSlot({
-        tab,
-        slot: "sqlserver",
-        remoteHost,
-        remotePort,
-        updateTab: useTabStore.getState().updateTab,
-      });
-      return { host: "127.0.0.1", port: info.localPort };
-    }
-    return { host: remoteHost, port: remotePort };
+  function resetPanel() {
+    setOverview(null);
+    setResults(null);
+    setColumns(null);
+    setSelected("");
+    setError("");
   }
 
-  const auth = () => ({ user: form.user.trim(), password: form.password });
-
-  async function connect(database?: string) {
+  async function browse(passwordOverride?: string, draft?: DbConnectionDraft) {
     setBusy(true);
     setError("");
     try {
-      const tgt = await resolveTarget();
+      const target = await flow.ensureConnectionTarget(false, draft);
+      const pw = passwordOverride !== undefined ? passwordOverride : tab.mssqlPassword;
+      const user = draft?.user ?? tab.mssqlUser;
+      const database = draft ? draft.database ?? "" : tab.mssqlDatabase;
       const ov = await cmd.mssqlOverview({
-        ...tgt,
-        ...auth(),
-        database: database ?? (form.database.trim() || null),
+        host: target.host,
+        port: target.port,
+        user: user.trim(),
+        password: pw,
+        database: database.trim() || null,
       });
       setOverview(ov);
-      setForm((f) => {
-        const nf = { ...f, database: ov.currentDatabase };
-        persist(nf);
-        return nf;
-      });
+      if (ov.currentDatabase && ov.currentDatabase !== tab.mssqlDatabase) {
+        updateTab(tab.id, { mssqlDatabase: ov.currentDatabase });
+      }
     } catch (e) {
       setError(fmt(e));
       setOverview(null);
@@ -123,15 +131,35 @@ export default function SqlServerPanel({ tab }: Props) {
     }
   }
 
+  const flow = useDbCredentialFlow({
+    tab,
+    kind: "sqlserver",
+    tunnelSlot: "sqlserver",
+    adapter: SQLSERVER_ADAPTER,
+    browse: (pwOverride, draft) => browse(pwOverride, draft),
+    hasLiveState: overview !== null,
+    onReset: resetPanel,
+    setError,
+    passwordInputRef,
+    t,
+  });
+
   async function run(text?: string) {
     const q = (text ?? sql).trim();
     if (!q) return;
     setBusy(true);
     setError("");
     try {
-      const tgt = await resolveTarget();
+      const target = await flow.ensureConnectionTarget();
       setResults(
-        await cmd.mssqlExecute({ ...tgt, ...auth(), database: form.database.trim() || null, sql: q }),
+        await cmd.mssqlExecute({
+          host: target.host,
+          port: target.port,
+          user: tab.mssqlUser.trim(),
+          password: tab.mssqlPassword,
+          database: tab.mssqlDatabase.trim() || null,
+          sql: q,
+        }),
       );
     } catch (e) {
       setError(fmt(e));
@@ -141,18 +169,23 @@ export default function SqlServerPanel({ tab }: Props) {
   }
 
   async function openTable(schema: string, name: string) {
-    const key = `${schema}.${name}`;
-    setSelected(key);
+    setSelected(`${schema}.${name}`);
     const q = `SELECT TOP 100 * FROM [${schema}].[${name}];`;
     setSql(q);
     setBusy(true);
     setError("");
     try {
-      const tgt = await resolveTarget();
-      const db = form.database.trim() || null;
+      const target = await flow.ensureConnectionTarget();
+      const base = {
+        host: target.host,
+        port: target.port,
+        user: tab.mssqlUser.trim(),
+        password: tab.mssqlPassword,
+        database: tab.mssqlDatabase.trim() || null,
+      };
       const [cols, rows] = await Promise.all([
-        cmd.mssqlColumns({ ...tgt, ...auth(), database: db, schema, table: name }),
-        cmd.mssqlExecute({ ...tgt, ...auth(), database: db, sql: q }),
+        cmd.mssqlColumns({ ...base, schema, table: name }),
+        cmd.mssqlExecute({ ...base, sql: q }),
       ]);
       setColumns(cols);
       setResults(rows);
@@ -163,124 +196,72 @@ export default function SqlServerPanel({ tab }: Props) {
     }
   }
 
-  async function disconnect() {
-    if (tab) {
-      await closeTunnelSlot(tab, "sqlserver", useTabStore.getState().updateTab).catch(() => {});
-    }
-    setOverview(null);
-    setResults(null);
-    setColumns(null);
-    setSelected("");
-    setError("");
-  }
-
-  const dbOptions = useMemo(
-    () => (overview?.databases ?? []).map((d) => ({ value: d, label: d })),
-    [overview],
+  const dialogs = (
+    <DbAddCredentialDialog
+      open={flow.addOpen}
+      onClose={() => flow.setAddOpen(false)}
+      kind="sqlserver"
+      savedConnectionIndex={flow.savedIndex}
+      adopting={flow.adopting}
+      tab={tab}
+      onSaved={flow.handleCredentialAdded}
+      onConnect={flow.handleCredentialConnected}
+    />
   );
 
-  // ── Connect form ──────────────────────────────────────────────────
+  // ── Splash (not connected) ────────────────────────────────────────
   if (!overview) {
+    const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
+      id: cred.id,
+      name: cred.label || cred.id,
+      env: inferEnv(cred.label),
+      engine: META.label,
+      addr: `${cred.host}:${cred.port}`,
+      via: { kind: flow.hasSsh ? "tunnel" : "direct", label: flow.hasSsh ? t("SSH tunnel") : t("direct") },
+      user: cred.user,
+      authHint: cred.hasPassword ? t("keyring") : undefined,
+      stats: <span className="sep">—</span>,
+      lastUsed: null,
+      status: "unknown",
+      tintVar: META.tintVar,
+      connectLabel: t("Connect"),
+      onConnect: () => flow.activateCredential(cred.id),
+      pending: flow.activating === cred.id,
+    }));
     return (
-      <div className="dbq-connect">
-        <div className="dbq-connect__card">
-          <div className="dbq-connect__title mono">
-            <META.icon size={14} /> {META.label}
-          </div>
-          <div className="dbq-connect__sub">{t(META.splashSubtitle)}</div>
-          <div className="dbq-form">
-            <label className="field">
-              <span className="field-label">{t("Host")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.host}
-                onChange={(e) => setField("host", e.target.value)}
-                placeholder="127.0.0.1"
-              />
-            </label>
-            <label className="field dbq-form__port">
-              <span className="field-label">{t("Port")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.port}
-                onChange={(e) => setField("port", e.target.value)}
-                placeholder="1433"
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("User")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.user}
-                onChange={(e) => setField("user", e.target.value)}
-                placeholder="sa"
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("Password")}</span>
-              <input
-                className="field-input is-mono"
-                type="password"
-                value={form.password}
-                onChange={(e) => setField("password", e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void connect();
-                }}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("Database")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.database}
-                onChange={(e) => setField("database", e.target.value)}
-                placeholder={t("(default)")}
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            className="btn is-primary"
-            disabled={busy || !form.host.trim() || !form.user.trim()}
-            onClick={() => void connect()}
-          >
-            <Plug size={13} /> {busy ? t("Connecting…") : t("Connect")}
-          </button>
-          {error && <div className="status-note mono status-note--error">{error}</div>}
-          <div className="dbq-connect__hint">
-            {tab && effectiveSshTarget(tab)
-              ? t("Connects via the SSH tunnel — host/port are as seen from the SSH host.")
-              : t("Connects directly to the address above (TLS off).")}
-          </div>
-        </div>
-      </div>
+      <>
+        {error && <div className="db-panel-banner"><div className="status-note mono status-note--error">{error}</div></div>}
+        <DbConnectSplash
+          kind="sqlserver"
+          probeTarget={flow.probeTarget}
+          probeState={flow.probeState}
+          detected={[]}
+          saved={savedRows}
+          onAddManual={() => {
+            flow.setAdopting(null);
+            flow.setAddOpen(true);
+          }}
+          footerHint={flow.connectingStep ?? undefined}
+        />
+        {dialogs}
+      </>
     );
   }
 
   // ── Connected shell ───────────────────────────────────────────────
+  const dbOptions = (overview.databases ?? []).map((d) => ({ value: d, label: d }));
   return (
     <div className="dbq-panel">
       <PanelHeader
         icon={META.icon}
         title={META.label}
-        meta={`${form.user}@${form.host}`}
+        meta={`${tab.mssqlUser}@${tab.mssqlHost}`}
         actions={
           <>
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              title={t("Refresh")}
-              onClick={() => void connect(form.database)}
-              disabled={busy}
-            >
+            <button type="button" className="btn is-ghost is-compact" title={t("Refresh")} onClick={() => void browse()} disabled={busy}>
               <RefreshCw size={11} />
             </button>
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              title={t("Disconnect")}
-              onClick={() => void disconnect()}
-            >
+            <button type="button" className="btn is-ghost is-compact" title={t("Disconnect")} onClick={() => void flow.disconnect()}>
               <Unplug size={11} />
             </button>
           </>
@@ -290,21 +271,19 @@ export default function SqlServerPanel({ tab }: Props) {
         <aside className="dbq-side">
           <div className="dbq-side__db">
             <Select
-              value={form.database}
+              value={tab.mssqlDatabase}
               onChange={(v) => {
-                setField("database", v);
+                updateTab(tab.id, { mssqlDatabase: v });
                 setColumns(null);
                 setSelected("");
-                void connect(v);
+                void browse();
               }}
               items={dbOptions}
               mono
             />
           </div>
           <div className="dbq-side__tables">
-            {overview.tables.length === 0 && (
-              <div className="empty-note">{t("No tables.")}</div>
-            )}
+            {overview.tables.length === 0 && <div className="empty-note">{t("No tables.")}</div>}
             {overview.tables.map((tbl) => {
               const key = `${tbl.schema}.${tbl.name}`;
               return (
@@ -338,12 +317,7 @@ export default function SqlServerPanel({ tab }: Props) {
               }}
             />
             <div className="dbq-editor__bar">
-              <button
-                type="button"
-                className="btn is-primary is-compact"
-                disabled={busy}
-                onClick={() => void run()}
-              >
+              <button type="button" className="btn is-primary is-compact" disabled={busy} onClick={() => void run()}>
                 <Play size={11} /> {t("Run")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
@@ -388,19 +362,11 @@ export default function SqlServerPanel({ tab }: Props) {
               <div className="data-table-wrap ux-selectable">
                 <table className="data-table">
                   <thead>
-                    <tr>
-                      {results.columns.map((c, i) => (
-                        <th key={i}>{c}</th>
-                      ))}
-                    </tr>
+                    <tr>{results.columns.map((c, i) => <th key={i}>{c}</th>)}</tr>
                   </thead>
                   <tbody>
                     {results.rows.map((row, i) => (
-                      <tr key={i}>
-                        {row.map((cell, j) => (
-                          <td key={j}>{cell}</td>
-                        ))}
-                      </tr>
+                      <tr key={i}>{row.map((cell, j) => <td key={j}>{cell}</td>)}</tr>
                     ))}
                   </tbody>
                 </table>
@@ -416,6 +382,7 @@ export default function SqlServerPanel({ tab }: Props) {
           </div>
         </section>
       </div>
+      {dialogs}
     </div>
   );
 }

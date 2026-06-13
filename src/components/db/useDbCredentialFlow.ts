@@ -17,9 +17,25 @@ import { useConnectionStore } from "../../stores/useConnectionStore";
 import { useDetectedServicesStore } from "../../stores/useDetectedServicesStore";
 import { useTabStore } from "../../stores/useTabStore";
 
-/** Kinds that persist a `DbCredential` + open an SSH tunnel. SQLite is
- *  excluded because it authenticates by file path, not host/port/user. */
-export type CredentialKind = Extract<DbKind, "mysql" | "postgres" | "redis">;
+/** Kinds that persist a `DbCredential`. SQLite is excluded because it
+ *  authenticates by file path, not host/port/user. Tunnel-based kinds
+ *  (mysql/postgres/redis/sqlserver/influx) forward a local port; the
+ *  remote-CLI kinds (oracle/dameng) connect from the SSH host itself, so
+ *  they pass `tunnelSlot: null`. */
+export type CredentialKind = Extract<
+  DbKind,
+  "mysql" | "postgres" | "redis" | "sqlserver" | "influx" | "oracle" | "dameng"
+>;
+
+/** Tunnel slot for a credential kind, or `null` for the remote-CLI kinds
+ *  (Oracle / Dameng) that run on the SSH host without a local forward. */
+export type CredentialTunnelSlot =
+  | "mysql"
+  | "postgres"
+  | "redis"
+  | "sqlserver"
+  | "influx"
+  | null;
 
 /**
  * Per-kind mapping from the generic "DB connection fields" the hook
@@ -65,7 +81,7 @@ export type DbCredentialFieldAdapter = {
 export type UseDbCredentialFlowOpts = {
   tab: TabState;
   kind: CredentialKind;
-  tunnelSlot: "mysql" | "postgres" | "redis";
+  tunnelSlot: CredentialTunnelSlot;
   adapter: DbCredentialFieldAdapter;
 
   /**
@@ -280,9 +296,10 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   const tabTunnelPort = adapter.readTunnelPort(tab);
 
   useEffect(() => {
-    if (!hasSsh || !tabTunnelId) return;
+    if (!hasSsh || !tabTunnelId || !tunnelSlot) return;
+    const slot = tunnelSlot;
     let cancelled = false;
-    void syncTunnelState(tab, tunnelSlot, updateTab).then((info) => {
+    void syncTunnelState(tab, slot, updateTab).then((info) => {
       if (cancelled || !info?.alive) return;
       setTunnelError("");
     });
@@ -320,6 +337,12 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
     if (!sshReady) {
       throw new Error(t("SSH credentials are not ready yet."));
     }
+    // Remote-CLI kinds (Oracle / Dameng) don't tunnel — the vendor CLI
+    // runs on the SSH host and dials the DB itself, so the "target" is
+    // the DB address as seen from that host.
+    if (!tunnelSlot) {
+      return { host: remoteHost, port: remotePort };
+    }
     const info = await ensureTunnelSlot({
       tab,
       slot: tunnelSlot,
@@ -346,7 +369,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
   }
 
   async function closeTunnel() {
-    if (!hasSsh || !tabTunnelId) return;
+    if (!hasSsh || !tabTunnelId || !tunnelSlot) return;
     setTunnelBusy(true);
     setTunnelError("");
     try {
@@ -479,7 +502,7 @@ export function useDbCredentialFlow(opts: UseDbCredentialFlowOpts): DbCredential
 
   async function disconnect() {
     onReset();
-    if (hasSsh && tabTunnelId) {
+    if (hasSsh && tabTunnelId && tunnelSlot) {
       try {
         await closeTunnelSlot(tab, tunnelSlot, updateTab);
       } catch {

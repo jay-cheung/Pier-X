@@ -1,123 +1,133 @@
-import { useMemo, useState } from "react";
-import { Play, Plug, Activity, RefreshCw, Unplug } from "lucide-react";
+import { useRef, useState } from "react";
+import { Activity, Play, RefreshCw, Unplug } from "lucide-react";
 import type { QueryExecutionResult, TabState } from "../lib/types";
-import { effectiveSshTarget } from "../lib/types";
 import * as cmd from "../lib/commands";
 import type { InfluxOverview } from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { DB_KIND_META } from "../lib/rightToolMeta";
-import { ensureTunnelSlot, closeTunnelSlot } from "../lib/sshTunnel";
 import { useTabStore } from "../stores/useTabStore";
-import Select from "../components/Select";
+import {
+  useDbCredentialFlow,
+  type DbCredentialFieldAdapter,
+} from "../components/db/useDbCredentialFlow";
+import { inferEnv } from "../components/db/dbTheme";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import DbAddCredentialDialog, {
+  type DbConnectionDraft,
+} from "../components/DbAddCredentialDialog";
 import PanelHeader from "../components/PanelHeader";
+import Select from "../components/Select";
 
-// InfluxDB client. Time-series store reached over its HTTP API
-// (InfluxQL on `/query`), so the "tables" are measurements and queries
-// are InfluxQL. Connects through the tab's SSH tunnel (slot "influx")
-// exactly like the SQL clients — the form address is as seen from the
-// SSH host (default 127.0.0.1:8086). Auth via a 2.x token or 1.x
-// user/password, both optional. Reuses the `.dbq-*` query-panel chrome.
+// InfluxDB client (InfluxQL over HTTP), aligned with the shared credential
+// flow: saved credentials in the keyring + connect splash + SSH tunnel
+// (slot "influx"). The keyring secret is the 2.x token when no user is
+// set, else the 1.x password — decided per query.
 
 type Props = { tab: TabState | null };
 
-type Form = {
-  host: string;
-  port: string;
-  database: string;
-  user: string;
-  password: string;
-  token: string;
-};
-
 const META = DB_KIND_META.influx;
 
-function storageKey(host: string) {
-  return `pier-x:influx:${host || "local"}`;
-}
+const INFLUX_ADAPTER: DbCredentialFieldAdapter = {
+  readHost: (t) => t.influxHost,
+  readPort: (t) => t.influxPort,
+  readUser: (t) => t.influxUser,
+  readPassword: (t) => t.influxPassword,
+  readActiveCredId: (t) => t.influxActiveCredentialId,
+  readTunnelId: (t) => t.influxTunnelId,
+  readTunnelPort: (t) => t.influxTunnelPort,
+  patchFromCred: (cred) => ({
+    influxActiveCredentialId: cred.id,
+    influxHost: cred.host,
+    influxPort: cred.port,
+    influxUser: cred.user,
+    influxPassword: "",
+    influxDatabase: cred.database ?? "",
+    influxTunnelId: null,
+    influxTunnelPort: null,
+  }),
+  patchFromSaved: (cred) => ({
+    influxActiveCredentialId: cred.id,
+    influxHost: cred.host,
+    influxPort: cred.port,
+    influxUser: cred.user,
+    influxDatabase: cred.database ?? "",
+    influxTunnelId: null,
+    influxTunnelPort: null,
+  }),
+  patchFromDraft: (draft) => ({
+    influxActiveCredentialId: null,
+    influxHost: draft.host,
+    influxPort: draft.port,
+    influxUser: draft.user,
+    influxPassword: draft.password,
+    influxDatabase: draft.database ?? "",
+    influxTunnelId: null,
+    influxTunnelPort: null,
+  }),
+  patchPassword: (password) => ({ influxPassword: password }),
+  patchPasswordAfterRotate: (password) => ({ influxPassword: password }),
+};
 
 export default function InfluxPanel({ tab }: Props) {
   const { t } = useI18n();
-  const fmt = (e: unknown) => localizeError(e, t);
-  const sshHost = tab ? effectiveSshTarget(tab)?.host ?? "" : "";
+  if (!tab) {
+    return (
+      <div className="panel-section panel-section--empty">
+        <div className="status-note mono">{t("Open an SSH tab to connect to a database.")}</div>
+      </div>
+    );
+  }
+  return <InfluxBody tab={tab} />;
+}
 
-  const [form, setForm] = useState<Form>(() => {
-    const def: Form = {
-      host: "127.0.0.1",
-      port: "8086",
-      database: "",
-      user: "",
-      password: "",
-      token: "",
-    };
-    try {
-      const raw = localStorage.getItem(storageKey(sshHost));
-      if (raw) return { ...def, ...JSON.parse(raw), password: "", token: "" };
-    } catch {
-      /* ignore malformed cache */
-    }
-    return def;
-  });
+function InfluxBody({ tab }: { tab: TabState }) {
+  const { t } = useI18n();
+  const fmt = (e: unknown) => localizeError(e, t);
+  const updateTab = useTabStore((s) => s.updateTab);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const [overview, setOverview] = useState<InfluxOverview | null>(null);
   const [results, setResults] = useState<QueryExecutionResult | null>(null);
-  const [selected, setSelected] = useState<string>("");
+  const [selected, setSelected] = useState("");
   const [sql, setSql] = useState("SHOW MEASUREMENTS");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const persist = (f: Form) => {
-    try {
-      localStorage.setItem(
-        storageKey(sshHost),
-        JSON.stringify({ host: f.host, port: f.port, user: f.user, database: f.database }),
-      );
-    } catch {
-      /* best-effort */
-    }
-  };
-
-  const setField = (k: keyof Form, v: string) =>
-    setForm((f) => ({ ...f, [k]: v }));
-
-  async function resolveTarget(): Promise<{ host: string; port: number }> {
-    const remotePort = Number.parseInt(form.port, 10) || 8086;
-    const remoteHost = form.host.trim() || "127.0.0.1";
-    if (tab && effectiveSshTarget(tab)) {
-      const info = await ensureTunnelSlot({
-        tab,
-        slot: "influx",
-        remoteHost,
-        remotePort,
-        updateTab: useTabStore.getState().updateTab,
-      });
-      return { host: "127.0.0.1", port: info.localPort };
-    }
-    return { host: remoteHost, port: remotePort };
+  function resetPanel() {
+    setOverview(null);
+    setResults(null);
+    setSelected("");
+    setError("");
   }
 
-  const auth = () => ({
-    user: form.user.trim(),
-    password: form.password,
-    token: form.token.trim(),
-  });
+  // The keyring secret is a token when no user is set (2.x), else a
+  // 1.x password.
+  function authFor(secret: string, user: string) {
+    return user.trim()
+      ? { user: user.trim(), password: secret, token: "" }
+      : { user: "", password: "", token: secret };
+  }
 
-  async function connect(database?: string) {
+  async function browse(passwordOverride?: string, draft?: DbConnectionDraft) {
     setBusy(true);
     setError("");
     try {
-      const tgt = await resolveTarget();
+      const target = await flow.ensureConnectionTarget(false, draft);
+      const secret = passwordOverride !== undefined ? passwordOverride : tab.influxPassword;
+      const user = draft?.user ?? tab.influxUser;
+      const database = draft ? draft.database ?? "" : tab.influxDatabase;
       const ov = await cmd.influxOverview({
-        ...tgt,
-        ...auth(),
-        database: database ?? (form.database.trim() || null),
+        host: target.host,
+        port: target.port,
+        database: database.trim() || null,
+        ...authFor(secret, user),
       });
       setOverview(ov);
-      setForm((f) => {
-        const nf = { ...f, database: ov.currentDatabase || f.database };
-        persist(nf);
-        return nf;
-      });
+      if (ov.currentDatabase && ov.currentDatabase !== tab.influxDatabase) {
+        updateTab(tab.id, { influxDatabase: ov.currentDatabase });
+      }
     } catch (e) {
       setError(fmt(e));
       setOverview(null);
@@ -126,15 +136,34 @@ export default function InfluxPanel({ tab }: Props) {
     }
   }
 
+  const flow = useDbCredentialFlow({
+    tab,
+    kind: "influx",
+    tunnelSlot: "influx",
+    adapter: INFLUX_ADAPTER,
+    browse: (pwOverride, draft) => browse(pwOverride, draft),
+    hasLiveState: overview !== null,
+    onReset: resetPanel,
+    setError,
+    passwordInputRef,
+    t,
+  });
+
   async function run(text?: string) {
     const q = (text ?? sql).trim();
     if (!q) return;
     setBusy(true);
     setError("");
     try {
-      const tgt = await resolveTarget();
+      const target = await flow.ensureConnectionTarget();
       setResults(
-        await cmd.influxQuery({ ...tgt, ...auth(), database: form.database.trim() || null, query: q }),
+        await cmd.influxQuery({
+          host: target.host,
+          port: target.port,
+          database: tab.influxDatabase.trim() || null,
+          ...authFor(tab.influxPassword, tab.influxUser),
+          query: q,
+        }),
       );
     } catch (e) {
       setError(fmt(e));
@@ -150,133 +179,70 @@ export default function InfluxPanel({ tab }: Props) {
     void run(q);
   }
 
-  async function disconnect() {
-    if (tab) {
-      await closeTunnelSlot(tab, "influx", useTabStore.getState().updateTab).catch(() => {});
-    }
-    setOverview(null);
-    setResults(null);
-    setSelected("");
-    setError("");
-  }
-
-  const dbOptions = useMemo(
-    () => (overview?.databases ?? []).map((d) => ({ value: d, label: d })),
-    [overview],
+  const dialogs = (
+    <DbAddCredentialDialog
+      open={flow.addOpen}
+      onClose={() => flow.setAddOpen(false)}
+      kind="influx"
+      savedConnectionIndex={flow.savedIndex}
+      adopting={flow.adopting}
+      tab={tab}
+      onSaved={flow.handleCredentialAdded}
+      onConnect={flow.handleCredentialConnected}
+    />
   );
 
-  // ── Connect form ──────────────────────────────────────────────────
   if (!overview) {
+    const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
+      id: cred.id,
+      name: cred.label || cred.id,
+      env: inferEnv(cred.label),
+      engine: META.label,
+      addr: `${cred.host}:${cred.port}`,
+      via: { kind: flow.hasSsh ? "tunnel" : "direct", label: flow.hasSsh ? t("SSH tunnel") : t("direct") },
+      user: cred.user || "—",
+      authHint: cred.hasPassword ? t("keyring") : undefined,
+      stats: <span className="sep">—</span>,
+      lastUsed: null,
+      status: "unknown",
+      tintVar: META.tintVar,
+      connectLabel: t("Connect"),
+      onConnect: () => flow.activateCredential(cred.id),
+      pending: flow.activating === cred.id,
+    }));
     return (
-      <div className="dbq-connect">
-        <div className="dbq-connect__card">
-          <div className="dbq-connect__title mono">
-            <META.icon size={14} /> {META.label}
-          </div>
-          <div className="dbq-connect__sub">{t(META.splashSubtitle)}</div>
-          <div className="dbq-form">
-            <label className="field">
-              <span className="field-label">{t("Host")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.host}
-                onChange={(e) => setField("host", e.target.value)}
-                placeholder="127.0.0.1"
-              />
-            </label>
-            <label className="field dbq-form__port">
-              <span className="field-label">{t("Port")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.port}
-                onChange={(e) => setField("port", e.target.value)}
-                placeholder="8086"
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("Database")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.database}
-                onChange={(e) => setField("database", e.target.value)}
-                placeholder={t("(default)")}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("Token")}</span>
-              <input
-                className="field-input is-mono"
-                type="password"
-                value={form.token}
-                onChange={(e) => setField("token", e.target.value)}
-                placeholder={t("(2.x API token, optional)")}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("User")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.user}
-                onChange={(e) => setField("user", e.target.value)}
-                placeholder={t("(1.x, optional)")}
-              />
-            </label>
-            <label className="field dbq-form__port">
-              <span className="field-label">{t("Password")}</span>
-              <input
-                className="field-input is-mono"
-                type="password"
-                value={form.password}
-                onChange={(e) => setField("password", e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void connect();
-                }}
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            className="btn is-primary"
-            disabled={busy || !form.host.trim()}
-            onClick={() => void connect()}
-          >
-            <Plug size={13} /> {busy ? t("Connecting…") : t("Connect")}
-          </button>
-          {error && <div className="status-note mono status-note--error">{error}</div>}
-          <div className="dbq-connect__hint">
-            {tab && effectiveSshTarget(tab)
-              ? t("Connects via the SSH tunnel — host/port are as seen from the SSH host.")
-              : t("Connects directly to the address above.")}
-          </div>
-        </div>
-      </div>
+      <>
+        {error && <div className="db-panel-banner"><div className="status-note mono status-note--error">{error}</div></div>}
+        <DbConnectSplash
+          kind="influx"
+          probeTarget={flow.probeTarget}
+          probeState={flow.probeState}
+          detected={[]}
+          saved={savedRows}
+          onAddManual={() => {
+            flow.setAdopting(null);
+            flow.setAddOpen(true);
+          }}
+          footerHint={flow.connectingStep ?? undefined}
+        />
+        {dialogs}
+      </>
     );
   }
 
-  // ── Connected shell ───────────────────────────────────────────────
+  const dbOptions = (overview.databases ?? []).map((d) => ({ value: d, label: d }));
   return (
     <div className="dbq-panel">
       <PanelHeader
         icon={META.icon}
         title={META.label}
-        meta={form.host}
+        meta={tab.influxHost}
         actions={
           <>
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              title={t("Refresh")}
-              onClick={() => void connect(form.database)}
-              disabled={busy}
-            >
+            <button type="button" className="btn is-ghost is-compact" title={t("Refresh")} onClick={() => void browse()} disabled={busy}>
               <RefreshCw size={11} />
             </button>
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              title={t("Disconnect")}
-              onClick={() => void disconnect()}
-            >
+            <button type="button" className="btn is-ghost is-compact" title={t("Disconnect")} onClick={() => void flow.disconnect()}>
               <Unplug size={11} />
             </button>
           </>
@@ -286,20 +252,18 @@ export default function InfluxPanel({ tab }: Props) {
         <aside className="dbq-side">
           <div className="dbq-side__db">
             <Select
-              value={form.database}
+              value={tab.influxDatabase}
               onChange={(v) => {
-                setField("database", v);
+                updateTab(tab.id, { influxDatabase: v });
                 setSelected("");
-                void connect(v);
+                void browse();
               }}
               items={dbOptions}
               mono
             />
           </div>
           <div className="dbq-side__tables">
-            {overview.measurements.length === 0 && (
-              <div className="empty-note">{t("No measurements.")}</div>
-            )}
+            {overview.measurements.length === 0 && <div className="empty-note">{t("No measurements.")}</div>}
             {overview.measurements.map((m) => (
               <button
                 key={m}
@@ -329,12 +293,7 @@ export default function InfluxPanel({ tab }: Props) {
               }}
             />
             <div className="dbq-editor__bar">
-              <button
-                type="button"
-                className="btn is-primary is-compact"
-                disabled={busy}
-                onClick={() => void run()}
-              >
+              <button type="button" className="btn is-primary is-compact" disabled={busy} onClick={() => void run()}>
                 <Play size={11} /> {t("Run")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
@@ -346,19 +305,11 @@ export default function InfluxPanel({ tab }: Props) {
               <div className="data-table-wrap ux-selectable">
                 <table className="data-table">
                   <thead>
-                    <tr>
-                      {results.columns.map((c, i) => (
-                        <th key={i}>{c}</th>
-                      ))}
-                    </tr>
+                    <tr>{results.columns.map((c, i) => <th key={i}>{c}</th>)}</tr>
                   </thead>
                   <tbody>
                     {results.rows.map((row, i) => (
-                      <tr key={i}>
-                        {row.map((cell, j) => (
-                          <td key={j}>{cell}</td>
-                        ))}
-                      </tr>
+                      <tr key={i}>{row.map((cell, j) => <td key={j}>{cell}</td>)}</tr>
                     ))}
                   </tbody>
                 </table>
@@ -374,6 +325,7 @@ export default function InfluxPanel({ tab }: Props) {
           </div>
         </section>
       </div>
+      {dialogs}
     </div>
   );
 }

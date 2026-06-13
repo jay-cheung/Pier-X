@@ -60,18 +60,30 @@ export default function DbConnectSplash({
   const theme = DB_THEMES[kind];
   const { icon: Glyph } = theme;
 
+  const probeDesc = t(
+    "Pier-X probed this host over the SSH session for {daemon}. Pick a detected instance, a saved profile, or add one manually.",
+    { daemon: theme.daemon },
+  );
   const titleByKind: Record<DbKind, string> = {
     mysql: t("Not connected to a MySQL instance"),
     postgres: t("Not connected to a PostgreSQL instance"),
     redis: t("Not connected to a Redis instance"),
     sqlite: t("Not connected to a SQLite database"),
+    sqlserver: t("Not connected to a SQL Server instance"),
+    influx: t("Not connected to an InfluxDB instance"),
+    oracle: t("Not connected to an Oracle instance"),
+    dameng: t("Not connected to a Dameng instance"),
   };
 
   const defaultDescription: Record<DbKind, string> = {
-    mysql: t("Pier-X probed this host over the SSH session for {daemon}. Pick a detected instance, a saved profile, or add one manually.", { daemon: theme.daemon }),
-    postgres: t("Pier-X probed this host over the SSH session for {daemon}. Pick a detected instance, a saved profile, or add one manually.", { daemon: theme.daemon }),
-    redis: t("Pier-X probed this host over the SSH session for {daemon}. Pick a detected instance, a saved profile, or add one manually.", { daemon: theme.daemon }),
+    mysql: probeDesc,
+    postgres: probeDesc,
+    redis: probeDesc,
     sqlite: t("Open a local database or pick one detected on the remote host."),
+    sqlserver: probeDesc,
+    influx: probeDesc,
+    oracle: probeDesc,
+    dameng: probeDesc,
   };
 
   const probeDotClass =

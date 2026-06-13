@@ -5,13 +5,20 @@ import { useDraggableDialog } from "./useDraggableDialog";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import * as cmd from "../lib/commands";
-import { RIGHT_TOOL_META } from "../lib/rightToolMeta";
+import { DB_THEMES } from "./db/dbTheme";
 import type { DbCredential, DbKind, DetectedDbInstance, TabState } from "../lib/types";
 import { effectiveSshTarget } from "../lib/types";
 import { useConnectionStore } from "../stores/useConnectionStore";
 
+/** Kinds the Add-Credential dialog persists. Matches the credential
+ *  flow's `CredentialKind` (SQLite excluded — it has no host/port/user). */
+type CredKind = Extract<
+  DbKind,
+  "mysql" | "postgres" | "redis" | "sqlserver" | "influx" | "oracle" | "dameng"
+>;
+
 export type DbConnectionDraft = {
-  kind: Extract<DbKind, "mysql" | "postgres" | "redis">;
+  kind: CredKind;
   label: string;
   host: string;
   port: number;
@@ -26,7 +33,7 @@ type Props = {
   open: boolean;
   onClose: () => void;
   /** Panel kind. Controls default port + which fields show. */
-  kind: Extract<DbKind, "mysql" | "postgres" | "redis">;
+  kind: CredKind;
   /** SSH profile index to attach the credential to. `null` means the
    *  dialog can connect for this tab only, but cannot persist. */
   savedConnectionIndex: number | null;
@@ -45,23 +52,40 @@ type Props = {
   onConnect: (draft: DbConnectionDraft) => void;
 };
 
-const DEFAULT_PORT: Record<Props["kind"], number> = {
+const DEFAULT_PORT: Record<CredKind, number> = {
   mysql: 3306,
   postgres: 5432,
   redis: 6379,
+  sqlserver: 1433,
+  influx: 8086,
+  oracle: 1521,
+  dameng: 5236,
 };
 
-const DEFAULT_USER: Record<Props["kind"], string> = {
+const DEFAULT_USER: Record<CredKind, string> = {
   mysql: "root",
   postgres: "postgres",
   redis: "",
+  sqlserver: "sa",
+  influx: "",
+  oracle: "system",
+  dameng: "SYSDBA",
 };
 
-const KIND_LABEL: Record<Props["kind"], string> = {
+const KIND_LABEL: Record<CredKind, string> = {
   mysql: "MySQL",
   postgres: "PostgreSQL",
   redis: "Redis",
+  sqlserver: "SQL Server",
+  influx: "InfluxDB",
+  oracle: "Oracle",
+  dameng: "达梦 DM",
 };
+
+/** Tunnel-based kinds whose ephemeral "Test connection" probe is wired.
+ *  The remote-CLI kinds (oracle/dameng) and influx skip the in-dialog
+ *  test — the panel surfaces connection errors on first browse instead. */
+const TESTABLE = new Set<CredKind>(["mysql", "postgres", "redis"]);
 
 export default function DbAddCredentialDialog({
   open,
@@ -188,6 +212,7 @@ export default function DbAddCredentialDialog({
    * useful only when the database actually accepts external clients.
    */
   async function testConnection() {
+    if (!TESTABLE.has(kind)) return;
     setTesting(true);
     setTestResult(null);
     try {
@@ -321,7 +346,7 @@ export default function DbAddCredentialDialog({
     }
   }
 
-  const Icon = RIGHT_TOOL_META[kind].icon;
+  const Icon = DB_THEMES[kind].icon;
   const submitLabel = saving
     ? canPersist ? t("Saving...") : t("Connecting...")
     : canPersist ? t("Save & connect") : t("Connect");
@@ -387,23 +412,43 @@ export default function DbAddCredentialDialog({
               />
             </div>
             <div className="dlg-row">
-              <label className="dlg-row-label">{t("Password")}</label>
+              <label className="dlg-row-label">
+                {kind === "influx" ? t("Token / Password") : t("Password")}
+              </label>
               <input
                 className="dlg-input"
                 type="password"
                 onChange={(e) => setPassword(e.currentTarget.value)}
-                placeholder={kind === "redis" ? t("AUTH secret (optional)") : ""}
+                placeholder={
+                  kind === "redis"
+                    ? t("AUTH secret (optional)")
+                    : kind === "influx"
+                      ? t("2.x API token or 1.x password")
+                      : ""
+                }
                 value={password}
               />
             </div>
             <div className="dlg-row">
               <label className="dlg-row-label">
-                {kind === "redis" ? t("DB index") : t("Database")}
+                {kind === "redis"
+                  ? t("DB index")
+                  : kind === "oracle"
+                    ? t("Service / SID")
+                    : kind === "influx"
+                      ? t("Bucket / DB")
+                      : t("Database")}
               </label>
               <input
                 className="dlg-input"
                 onChange={(e) => setDatabase(e.currentTarget.value)}
-                placeholder={kind === "redis" ? "0" : t("(optional)")}
+                placeholder={
+                  kind === "redis"
+                    ? "0"
+                    : kind === "oracle"
+                      ? "XEPDB1"
+                      : t("(optional)")
+                }
                 value={database}
               />
             </div>
@@ -438,27 +483,29 @@ export default function DbAddCredentialDialog({
         </div>
         <div className="dlg-foot">
           <div className="dlg-foot-main">
-            <button
-              className="gb-btn"
-              disabled={
-                testing ||
-                saving ||
-                host.trim() === "" ||
-                // MySQL / Postgres won't accept an empty user; Redis can
-                // (no username = default ACL user, only meaningful from 6+).
-                (kind !== "redis" && user.trim() === "")
-              }
-              onClick={() => void testConnection()}
-              type="button"
-              title={
-                tab && effectiveSshTarget(tab)
-                  ? t("Probes via the tab's SSH session — no port exposure required.")
-                  : t("Probes directly to host:port — only works when the database accepts external clients.")
-              }
-            >
-              {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
-              {testing ? t("Testing...") : t("Test connection")}
-            </button>
+            {TESTABLE.has(kind) && (
+              <button
+                className="gb-btn"
+                disabled={
+                  testing ||
+                  saving ||
+                  host.trim() === "" ||
+                  // MySQL / Postgres won't accept an empty user; Redis can
+                  // (no username = default ACL user, only meaningful from 6+).
+                  (kind !== "redis" && user.trim() === "")
+                }
+                onClick={() => void testConnection()}
+                type="button"
+                title={
+                  tab && effectiveSshTarget(tab)
+                    ? t("Probes via the tab's SSH session — no port exposure required.")
+                    : t("Probes directly to host:port — only works when the database accepts external clients.")
+                }
+              >
+                {testing ? <Loader2 size={11} className="spin" /> : <Plug size={11} />}
+                {testing ? t("Testing...") : t("Test connection")}
+              </button>
+            )}
             {testResult && (
               <span
                 className={

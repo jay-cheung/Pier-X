@@ -3010,6 +3010,9 @@ fn db_kind_str(k: DbKind) -> &'static str {
         DbKind::Redis => "redis",
         DbKind::Sqlite => "sqlite",
         DbKind::Sqlserver => "sqlserver",
+        DbKind::Influx => "influx",
+        DbKind::Oracle => "oracle",
+        DbKind::Dameng => "dameng",
     }
 }
 
@@ -3020,6 +3023,9 @@ fn parse_db_kind(s: &str) -> Result<DbKind, String> {
         "redis" => Ok(DbKind::Redis),
         "sqlite" => Ok(DbKind::Sqlite),
         "sqlserver" | "mssql" => Ok(DbKind::Sqlserver),
+        "influx" | "influxdb" => Ok(DbKind::Influx),
+        "oracle" => Ok(DbKind::Oracle),
+        "dameng" | "dm" => Ok(DbKind::Dameng),
         other => Err(format!("unknown db kind: {other}")),
     }
 }

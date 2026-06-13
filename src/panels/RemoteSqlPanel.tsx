@@ -1,137 +1,195 @@
-import { useState } from "react";
-import { Play, Plug, RefreshCw, Table2, Unplug } from "lucide-react";
+import { useRef, useState } from "react";
+import { Play, RefreshCw, Table2, Unplug } from "lucide-react";
 import type { DbProduct, QueryExecutionResult, TabState } from "../lib/types";
-import { effectiveSshTarget, isSshTargetReady } from "../lib/types";
 import * as cmd from "../lib/commands";
 import { useI18n } from "../i18n/useI18n";
 import { localizeError } from "../i18n/localizeMessage";
 import { DB_KIND_META } from "../lib/rightToolMeta";
+import {
+  useDbCredentialFlow,
+  type DbCredentialFieldAdapter,
+} from "../components/db/useDbCredentialFlow";
+import { inferEnv } from "../components/db/dbTheme";
+import DbConnectSplash from "../components/db/DbConnectSplash";
+import type { DbSplashRowData } from "../components/db/DbSplashRow";
+import DbAddCredentialDialog, {
+  type DbConnectionDraft,
+} from "../components/DbAddCredentialDialog";
 import PanelHeader from "../components/PanelHeader";
 
 // Oracle / Dameng client over the remote host's CLI (sqlplus / disql).
-// No tunnel and no local driver: the vendor CLI runs ON the SSH host and
-// connects to the DB from there, so this tool is SSH-only. Reuses the
-// `.dbq-*` query-panel chrome. Dameng support is best-effort pending
-// validation against a real DM instance (disql CSV parsing).
+// Aligned with the shared credential flow (saved creds + keyring + connect
+// splash) but with NO tunnel — the vendor CLI runs ON the SSH host, so the
+// flow passes `tunnelSlot: null` and the panel hands the SSH params plus
+// the saved DB host/port straight to the query command. SSH-only.
 
-type Props = { tab: TabState | null; kind: Extract<DbProduct, "oracle" | "dameng"> };
-
-type Form = {
-  dbHost: string;
-  dbPort: string;
-  dbUser: string;
-  dbPassword: string;
-  dbService: string;
-};
+type RemoteKind = Extract<DbProduct, "oracle" | "dameng">;
+type Props = { tab: TabState | null; kind: RemoteKind };
 
 type Dialect = {
   hasService: boolean;
-  defaultPort: number;
   tablesSql: string;
   preview: (name: string) => string;
 };
 
-const DIALECTS: Record<"oracle" | "dameng", Dialect> = {
+const DIALECTS: Record<RemoteKind, Dialect> = {
   oracle: {
     hasService: true,
-    defaultPort: 1521,
     tablesSql: "SELECT table_name FROM user_tables ORDER BY table_name",
     preview: (n) => `SELECT * FROM "${n}" FETCH FIRST 100 ROWS ONLY`,
   },
   dameng: {
     hasService: false,
-    defaultPort: 5236,
     tablesSql: "SELECT table_name FROM user_tables ORDER BY table_name",
     preview: (n) => `SELECT TOP 100 * FROM "${n}"`,
   },
 };
 
-function storageKey(kind: string, host: string) {
-  return `pier-x:${kind}:${host || "local"}`;
+function makeAdapter(kind: RemoteKind): DbCredentialFieldAdapter {
+  if (kind === "oracle") {
+    return {
+      readHost: (t) => t.oracleHost,
+      readPort: (t) => t.oraclePort,
+      readUser: (t) => t.oracleUser,
+      readPassword: (t) => t.oraclePassword,
+      readActiveCredId: (t) => t.oracleActiveCredentialId,
+      readTunnelId: () => null,
+      readTunnelPort: () => null,
+      patchFromCred: (cred) => ({
+        oracleActiveCredentialId: cred.id,
+        oracleHost: cred.host,
+        oraclePort: cred.port,
+        oracleUser: cred.user,
+        oraclePassword: "",
+        oracleService: cred.database ?? "",
+      }),
+      patchFromSaved: (cred) => ({
+        oracleActiveCredentialId: cred.id,
+        oracleHost: cred.host,
+        oraclePort: cred.port,
+        oracleUser: cred.user,
+        oracleService: cred.database ?? "",
+      }),
+      patchFromDraft: (draft) => ({
+        oracleActiveCredentialId: null,
+        oracleHost: draft.host,
+        oraclePort: draft.port,
+        oracleUser: draft.user,
+        oraclePassword: draft.password,
+        oracleService: draft.database ?? "",
+      }),
+      patchPassword: (password) => ({ oraclePassword: password }),
+      patchPasswordAfterRotate: (password) => ({ oraclePassword: password }),
+    };
+  }
+  return {
+    readHost: (t) => t.damengHost,
+    readPort: (t) => t.damengPort,
+    readUser: (t) => t.damengUser,
+    readPassword: (t) => t.damengPassword,
+    readActiveCredId: (t) => t.damengActiveCredentialId,
+    readTunnelId: () => null,
+    readTunnelPort: () => null,
+    patchFromCred: (cred) => ({
+      damengActiveCredentialId: cred.id,
+      damengHost: cred.host,
+      damengPort: cred.port,
+      damengUser: cred.user,
+      damengPassword: "",
+    }),
+    patchFromSaved: (cred) => ({
+      damengActiveCredentialId: cred.id,
+      damengHost: cred.host,
+      damengPort: cred.port,
+      damengUser: cred.user,
+    }),
+    patchFromDraft: (draft) => ({
+      damengActiveCredentialId: null,
+      damengHost: draft.host,
+      damengPort: draft.port,
+      damengUser: draft.user,
+      damengPassword: draft.password,
+    }),
+    patchPassword: (password) => ({ damengPassword: password }),
+    patchPasswordAfterRotate: (password) => ({ damengPassword: password }),
+  };
 }
 
 export default function RemoteSqlPanel({ tab, kind }: Props) {
   const { t } = useI18n();
+  if (!tab) {
+    return (
+      <div className="panel-section panel-section--empty">
+        <div className="status-note mono">{t("Open an SSH tab to connect to a database.")}</div>
+      </div>
+    );
+  }
+  return <RemoteSqlBody key={kind} tab={tab} kind={kind} />;
+}
+
+function RemoteSqlBody({ tab, kind }: { tab: TabState; kind: RemoteKind }) {
+  const { t } = useI18n();
   const fmt = (e: unknown) => localizeError(e, t);
   const meta = DB_KIND_META[kind];
   const dialect = DIALECTS[kind];
-  const sshTarget = tab ? effectiveSshTarget(tab) : null;
-  const sshReady = isSshTargetReady(sshTarget);
-  const sshHost = sshTarget?.host ?? "";
-
-  const [form, setForm] = useState<Form>(() => {
-    const def: Form = {
-      dbHost: "127.0.0.1",
-      dbPort: String(dialect.defaultPort),
-      dbUser: kind === "oracle" ? "system" : "SYSDBA",
-      dbPassword: "",
-      dbService: kind === "oracle" ? "XEPDB1" : "",
-    };
-    try {
-      const raw = localStorage.getItem(storageKey(kind, sshHost));
-      if (raw) return { ...def, ...JSON.parse(raw), dbPassword: "" };
-    } catch {
-      /* ignore malformed cache */
-    }
-    return def;
-  });
+  const adapter = useRef(makeAdapter(kind)).current;
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const [connected, setConnected] = useState(false);
   const [tables, setTables] = useState<string[]>([]);
   const [results, setResults] = useState<QueryExecutionResult | null>(null);
-  const [selected, setSelected] = useState<string>("");
-  const [sql, setSql] = useState(kind === "oracle" ? "SELECT * FROM v$version" : "SELECT * FROM v$version");
+  const [selected, setSelected] = useState("");
+  const [sql, setSql] = useState("SELECT * FROM v$version");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const setField = (k: keyof Form, v: string) =>
-    setForm((f) => ({ ...f, [k]: v }));
-
-  const persist = (f: Form) => {
-    try {
-      localStorage.setItem(
-        storageKey(kind, sshHost),
-        JSON.stringify({
-          dbHost: f.dbHost,
-          dbPort: f.dbPort,
-          dbUser: f.dbUser,
-          dbService: f.dbService,
-        }),
-      );
-    } catch {
-      /* best-effort */
-    }
-  };
-
-  async function exec(sqlText: string): Promise<QueryExecutionResult> {
-    if (!sshTarget) throw new Error(t("This tab has no SSH context."));
-    const base = {
-      host: sshTarget.host,
-      port: sshTarget.port,
-      user: sshTarget.user,
-      authMode: sshTarget.authMode,
-      password: sshTarget.password,
-      keyPath: sshTarget.keyPath,
-      savedConnectionIndex: sshTarget.savedConnectionIndex,
-      dbHost: form.dbHost.trim(),
-      dbPort: Number.parseInt(form.dbPort, 10) || dialect.defaultPort,
-      dbUser: form.dbUser.trim(),
-      dbPassword: form.dbPassword,
-      sql: sqlText,
-    };
-    return kind === "oracle"
-      ? cmd.oracleQuery({ ...base, dbService: form.dbService.trim() })
-      : cmd.damengQuery(base);
+  function resetPanel() {
+    setConnected(false);
+    setTables([]);
+    setResults(null);
+    setSelected("");
+    setError("");
   }
 
-  async function connect() {
+  function dbAddr() {
+    return { host: adapter.readHost(tab), port: adapter.readPort(tab) };
+  }
+
+  async function exec(sqlText: string, passwordOverride?: string, draft?: DbConnectionDraft) {
+    const ssh = flow.sshTarget;
+    if (!ssh) throw new Error(t("This tab has no SSH context."));
+    const target = await flow.ensureConnectionTarget(false, draft);
+    const pw = passwordOverride !== undefined ? passwordOverride : adapter.readPassword(tab);
+    const user = draft?.user ?? adapter.readUser(tab);
+    const sshBase = {
+      host: ssh.host,
+      port: ssh.port,
+      user: ssh.user,
+      authMode: ssh.authMode,
+      password: ssh.password,
+      keyPath: ssh.keyPath,
+      savedConnectionIndex: ssh.savedConnectionIndex,
+      dbHost: target.host,
+      dbPort: target.port,
+      dbUser: user.trim(),
+      dbPassword: pw,
+      sql: sqlText,
+    };
+    if (kind === "oracle") {
+      const service = draft ? draft.database ?? "" : tab.oracleService;
+      return cmd.oracleQuery({ ...sshBase, dbService: service.trim() });
+    }
+    return cmd.damengQuery(sshBase);
+  }
+
+  // Connecting = running the table list against the (just-activated) cred.
+  async function browse(passwordOverride?: string, draft?: DbConnectionDraft) {
     setBusy(true);
     setError("");
     try {
-      const r = await exec(dialect.tablesSql);
+      const r = await exec(dialect.tablesSql, passwordOverride, draft);
       setTables(r.rows.map((row) => row[0]).filter(Boolean));
       setConnected(true);
-      persist(form);
     } catch (e) {
       setError(fmt(e));
       setConnected(false);
@@ -139,6 +197,19 @@ export default function RemoteSqlPanel({ tab, kind }: Props) {
       setBusy(false);
     }
   }
+
+  const flow = useDbCredentialFlow({
+    tab,
+    kind,
+    tunnelSlot: null,
+    adapter,
+    browse: (pwOverride, draft) => browse(pwOverride, draft),
+    hasLiveState: connected,
+    onReset: resetPanel,
+    setError,
+    passwordInputRef,
+    t,
+  });
 
   async function run(text?: string) {
     const q = (text ?? sql).trim();
@@ -161,16 +232,20 @@ export default function RemoteSqlPanel({ tab, kind }: Props) {
     void run(q);
   }
 
-  function disconnect() {
-    setConnected(false);
-    setTables([]);
-    setResults(null);
-    setSelected("");
-    setError("");
-  }
+  const dialogs = (
+    <DbAddCredentialDialog
+      open={flow.addOpen}
+      onClose={() => flow.setAddOpen(false)}
+      kind={kind}
+      savedConnectionIndex={flow.savedIndex}
+      adopting={flow.adopting}
+      tab={tab}
+      onSaved={flow.handleCredentialAdded}
+      onConnect={flow.handleCredentialConnected}
+    />
+  );
 
-  // SQL*Plus / disql run on the SSH host, so this tool is remote-only.
-  if (!sshTarget || !sshReady) {
+  if (!flow.hasSsh) {
     return (
       <div className="panel-section panel-section--empty">
         <div className="panel-section__title mono">
@@ -183,109 +258,60 @@ export default function RemoteSqlPanel({ tab, kind }: Props) {
     );
   }
 
-  // ── Connect form ──────────────────────────────────────────────────
   if (!connected) {
+    const savedRows: DbSplashRowData[] = flow.savedForKind.map((cred) => ({
+      id: cred.id,
+      name: cred.label || cred.id,
+      env: inferEnv(cred.label),
+      engine: meta.label,
+      addr: `${cred.host}:${cred.port}`,
+      via: { kind: "remote", label: kind === "oracle" ? "sqlplus" : "disql" },
+      user: cred.user,
+      authHint: cred.hasPassword ? t("keyring") : undefined,
+      stats: cred.database ? <span>{cred.database}</span> : <span className="sep">—</span>,
+      lastUsed: null,
+      status: "unknown",
+      tintVar: meta.tintVar,
+      connectLabel: t("Connect"),
+      onConnect: () => flow.activateCredential(cred.id),
+      pending: flow.activating === cred.id,
+    }));
     return (
-      <div className="dbq-connect">
-        <div className="dbq-connect__card">
-          <div className="dbq-connect__title mono">
-            <meta.icon size={14} /> {meta.label}
-          </div>
-          <div className="dbq-connect__sub">{t(meta.splashSubtitle)}</div>
-          <div className="dbq-form">
-            <label className="field">
-              <span className="field-label">{t("Host")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.dbHost}
-                onChange={(e) => setField("dbHost", e.target.value)}
-                placeholder="127.0.0.1"
-              />
-            </label>
-            <label className="field dbq-form__port">
-              <span className="field-label">{t("Port")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.dbPort}
-                onChange={(e) => setField("dbPort", e.target.value)}
-                placeholder={String(dialect.defaultPort)}
-              />
-            </label>
-            {dialect.hasService && (
-              <label className="field">
-                <span className="field-label">{t("Service / SID")}</span>
-                <input
-                  className="field-input is-mono"
-                  value={form.dbService}
-                  onChange={(e) => setField("dbService", e.target.value)}
-                  placeholder="XEPDB1"
-                />
-              </label>
-            )}
-            <label className="field">
-              <span className="field-label">{t("User")}</span>
-              <input
-                className="field-input is-mono"
-                value={form.dbUser}
-                onChange={(e) => setField("dbUser", e.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span className="field-label">{t("Password")}</span>
-              <input
-                className="field-input is-mono"
-                type="password"
-                value={form.dbPassword}
-                onChange={(e) => setField("dbPassword", e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void connect();
-                }}
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            className="btn is-primary"
-            disabled={busy || !form.dbHost.trim() || !form.dbUser.trim()}
-            onClick={() => void connect()}
-          >
-            <Plug size={13} /> {busy ? t("Connecting…") : t("Connect")}
-          </button>
-          {error && <div className="status-note mono status-note--error">{error}</div>}
-          <div className="dbq-connect__hint">
-            {t("Runs {bin} on the SSH host — it must be installed there and able to reach the database.", {
-              bin: kind === "oracle" ? "sqlplus" : "disql",
-            })}
-          </div>
-        </div>
-      </div>
+      <>
+        {error && <div className="db-panel-banner"><div className="status-note mono status-note--error">{error}</div></div>}
+        <DbConnectSplash
+          kind={kind}
+          probeTarget={flow.probeTarget}
+          probeState="idle"
+          detected={[]}
+          saved={savedRows}
+          onAddManual={() => {
+            flow.setAdopting(null);
+            flow.setAddOpen(true);
+          }}
+          description={t("Runs {bin} on the SSH host — it must be installed there and able to reach the database.", {
+            bin: kind === "oracle" ? "sqlplus" : "disql",
+          })}
+          footerHint={flow.connectingStep ?? undefined}
+        />
+        {dialogs}
+      </>
     );
   }
 
-  // ── Connected shell ───────────────────────────────────────────────
+  const addr = dbAddr();
   return (
     <div className="dbq-panel">
       <PanelHeader
         icon={meta.icon}
         title={meta.label}
-        meta={`${form.dbUser}@${form.dbHost}`}
+        meta={`${adapter.readUser(tab)}@${addr.host}`}
         actions={
           <>
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              title={t("Refresh")}
-              onClick={() => void connect()}
-              disabled={busy}
-            >
+            <button type="button" className="btn is-ghost is-compact" title={t("Refresh")} onClick={() => void browse()} disabled={busy}>
               <RefreshCw size={11} />
             </button>
-            <button
-              type="button"
-              className="btn is-ghost is-compact"
-              title={t("Disconnect")}
-              onClick={disconnect}
-            >
+            <button type="button" className="btn is-ghost is-compact" title={t("Disconnect")} onClick={() => void flow.disconnect()}>
               <Unplug size={11} />
             </button>
           </>
@@ -324,12 +350,7 @@ export default function RemoteSqlPanel({ tab, kind }: Props) {
               }}
             />
             <div className="dbq-editor__bar">
-              <button
-                type="button"
-                className="btn is-primary is-compact"
-                disabled={busy}
-                onClick={() => void run()}
-              >
+              <button type="button" className="btn is-primary is-compact" disabled={busy} onClick={() => void run()}>
                 <Play size={11} /> {t("Run")}
               </button>
               <span className="dbq-editor__hint">⌘⏎</span>
@@ -341,19 +362,11 @@ export default function RemoteSqlPanel({ tab, kind }: Props) {
               <div className="data-table-wrap ux-selectable">
                 <table className="data-table">
                   <thead>
-                    <tr>
-                      {results.columns.map((c, i) => (
-                        <th key={i}>{c}</th>
-                      ))}
-                    </tr>
+                    <tr>{results.columns.map((c, i) => <th key={i}>{c}</th>)}</tr>
                   </thead>
                   <tbody>
                     {results.rows.map((row, i) => (
-                      <tr key={i}>
-                        {row.map((cell, j) => (
-                          <td key={j}>{cell}</td>
-                        ))}
-                      </tr>
+                      <tr key={i}>{row.map((cell, j) => <td key={j}>{cell}</td>)}</tr>
                     ))}
                   </tbody>
                 </table>
@@ -369,6 +382,7 @@ export default function RemoteSqlPanel({ tab, kind }: Props) {
           </div>
         </section>
       </div>
+      {dialogs}
     </div>
   );
 }

@@ -237,6 +237,14 @@ pub enum DbKind {
     Sqlite,
     /// Microsoft SQL Server (1433).
     Sqlserver,
+    /// InfluxDB time-series (8086). `database` = bucket/db, password
+    /// slot carries the 2.x API token or 1.x password.
+    Influx,
+    /// Oracle Database (1521) via remote `sqlplus`. `database` = service
+    /// name / SID.
+    Oracle,
+    /// Dameng (达梦) (5236) via remote `disql`.
+    Dameng,
 }
 
 /// How the password for a DB credential is stored.

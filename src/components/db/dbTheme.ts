@@ -1,4 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
+import { Activity, Database, Server } from "lucide-react";
 
 import MySqlIcon from "../icons/MySqlIcon";
 import PostgresIcon from "../icons/PostgresIcon";
@@ -53,6 +54,34 @@ export const DB_THEMES: Record<DbKind, DbTheme> = {
     chipBgVar: "color-mix(in srgb, var(--svc-sqlite) 18%, transparent)",
     daemon: "libsqlite3",
     icon: SqliteIcon,
+  },
+  sqlserver: {
+    kind: "sqlserver",
+    tintVar: "var(--svc-sqlserver)",
+    chipBgVar: "color-mix(in srgb, var(--svc-sqlserver) 18%, transparent)",
+    daemon: "sqlservr",
+    icon: Server,
+  },
+  influx: {
+    kind: "influx",
+    tintVar: "var(--svc-influx)",
+    chipBgVar: "color-mix(in srgb, var(--svc-influx) 18%, transparent)",
+    daemon: "influxd",
+    icon: Activity,
+  },
+  oracle: {
+    kind: "oracle",
+    tintVar: "var(--svc-oracle)",
+    chipBgVar: "color-mix(in srgb, var(--svc-oracle) 18%, transparent)",
+    daemon: "sqlplus",
+    icon: Database,
+  },
+  dameng: {
+    kind: "dameng",
+    tintVar: "var(--svc-dameng)",
+    chipBgVar: "color-mix(in srgb, var(--svc-dameng) 18%, transparent)",
+    daemon: "disql",
+    icon: Database,
   },
 };
 

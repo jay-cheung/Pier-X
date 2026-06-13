@@ -36,6 +36,22 @@ export function isDbAuthError(kind: DbKind, message: string): boolean {
         m.includes("invalid password") ||
         m.includes("authentication required")
       );
+    case "sqlserver":
+      // tiberius / TDS: "Login failed for user" → error 18456.
+      return m.includes("login failed") || m.includes("18456");
+    case "influx":
+      // HTTP 401 from the /query endpoint.
+      return (
+        m.includes("unauthorized") ||
+        m.includes("http 401") ||
+        m.includes("authentication")
+      );
+    case "oracle":
+      // sqlplus: ORA-01017 invalid username/password.
+      return m.includes("ora-01017") || m.includes("invalid username");
+    case "dameng":
+      // disql login failures.
+      return m.includes("invalid username") || (m.includes("login") && m.includes("fail"));
     case "sqlite":
       return false;
   }
