@@ -1159,8 +1159,8 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
             <table className="mon-table mon-table--procs">
               <thead>
                 <tr>
-                  <th className="mon-col-pid">{t("PID")}</th>
                   <th>{t("COMMAND")}</th>
+                  <th className="mon-col-pid">{t("PID")}</th>
                   <th className="mon-col-ports">{t("PORTS")}</th>
                   <th className="mon-col-num">{t("CPU%")}</th>
                   <th className="mon-col-num">{t("MEM%")}</th>
@@ -1182,7 +1182,6 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
                       : `${row.command} · PID ${row.pid}${ppidLabel} · ${t("elapsed")} ${row.elapsed}${portsHint}`;
                     return (
                       <tr key={`${row.pid}-${i}`} title={tooltip}>
-                        <td className="mono mon-cell-muted">{row.pid}</td>
                         <td className="mono mon-cell-trunc">
                           <span className="mon-proc-name">
                             {Array.from({ length: Math.min(row.depth, 8) }).map((_, d) => (
@@ -1192,6 +1191,7 @@ function ServerMonitorPanelBody({ tab, onEditConnection, isActive = true }: Prop
                             <span className="mon-cell-trunc">{row.command}</span>
                           </span>
                         </td>
+                        <td className="mono mon-cell-muted">{row.pid}</td>
                         <td className="mono mon-cell-trunc mon-proc-ports">{portsCompactLabel}</td>
                         <td className="mono mon-cell-right">{row.cpuPct}</td>
                         <td className="mono mon-cell-right">{row.memPct}</td>

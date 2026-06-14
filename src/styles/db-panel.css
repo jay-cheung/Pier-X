@@ -2878,6 +2878,11 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Positioning context so a panel's full-bleed `position:absolute;
+     inset:0` splash (DbConnectSplash `.dbs-splash`) fills THIS region —
+     below the product switcher — instead of escaping up to
+     `.right-tool-slot` and painting over the switcher bar. */
+  position: relative;
 }
 .db-switcher {
   display: flex;
