@@ -254,7 +254,11 @@ fn build_config(config: &RemoteDesktopConfig) -> connector::Config {
             height: config.height,
         },
         desktop_scale_factor: 0,
-        enable_tls: false,
+        // Offer BOTH plain TLS (SSL) and NLA/CredSSP (HYBRID) in the X.224
+        // security negotiation, and let the server choose. Requesting HYBRID
+        // alone makes a TLS-only server (NLA disabled / "less secure" mode)
+        // close the connection during negotiation.
+        enable_tls: true,
         enable_credssp: true,
         credentials: Credentials::UsernamePassword {
             username: config.username.clone(),
