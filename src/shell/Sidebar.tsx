@@ -1214,7 +1214,20 @@ export default function Sidebar({ onOpenLocalTerminal, onConnectSaved, onConnect
           onConnect={onConnectSaved}
           onConnectRemoteDesktop={onConnectRemoteDesktop}
           onEdit={onEditConnection}
-          onRemove={(index) => { void remove(index).catch(reportError); }}
+          onRemove={(index) => {
+            void (async () => {
+              const conn = connections.find((c) => c.index === index);
+              const name = conn ? effectiveGroup(conn).display || conn.host : "";
+              const ok = await confirm({
+                title: t("Delete connection"),
+                message: t("Delete connection {name}?", { name }),
+                confirmLabel: t("Delete"),
+                tone: "destructive",
+              });
+              if (!ok) return;
+              await remove(index).catch(reportError);
+            })();
+          }}
           onNew={onNewConnection}
           onRefresh={() => { void refreshConnections(); }}
           onBroadcastToIndices={onBroadcastToIndices}

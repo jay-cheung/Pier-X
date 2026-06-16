@@ -11,6 +11,11 @@ type Props = {
   max: number;
   /** Callback when size changes */
   onResize: (newSize: number) => void;
+  /** Fired on mousedown, before the drag begins. */
+  onResizeStart?: () => void;
+  /** Fired on mouseup with the final committed size. Lets the parent run
+   *  snap logic (e.g. collapse a pane) once the drag settles. */
+  onResizeEnd?: (finalSize: number) => void;
   /** Extra class for positioning (e.g. "resize-handle--left") */
   className?: string;
   /** Accessible label for keyboard and screen-reader users */
@@ -25,12 +30,17 @@ export default function ResizeHandle({
   min,
   max,
   onResize,
+  onResizeStart,
+  onResizeEnd,
   className,
   ariaLabel,
 }: Props) {
   const dragging = useRef(false);
   const startX = useRef(0);
   const startSize = useRef(0);
+  // Last size handed to onResize during the drag — replayed to onResizeEnd on
+  // mouseup so the parent's snap logic sees the final committed width.
+  const lastSize = useRef(size);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -38,12 +48,14 @@ export default function ResizeHandle({
       dragging.current = true;
       startX.current = e.clientX;
       startSize.current = size;
+      lastSize.current = size;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
       // Signals the pane-width transition to turn off so drag feels 1:1.
       document.body.classList.add("is-resizing");
+      onResizeStart?.();
     },
-    [size],
+    [size, onResizeStart],
   );
 
   const handleKeyDown = useCallback(
@@ -85,7 +97,9 @@ export default function ResizeHandle({
       const newSize = direction === "left"
         ? startSize.current + delta
         : startSize.current - delta;
-      onResize(Math.max(min, Math.min(max, newSize)));
+      const clamped = Math.max(min, Math.min(max, newSize));
+      lastSize.current = clamped;
+      onResize(clamped);
     };
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -109,6 +123,7 @@ export default function ResizeHandle({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       document.body.classList.remove("is-resizing");
+      onResizeEnd?.(lastSize.current);
     };
 
     document.addEventListener("mousemove", handleMouseMove);
@@ -118,7 +133,7 @@ export default function ResizeHandle({
       document.removeEventListener("mouseup", handleMouseUp);
       if (rafHandle !== null) window.cancelAnimationFrame(rafHandle);
     };
-  }, [direction, min, max, onResize]);
+  }, [direction, min, max, onResize, onResizeEnd]);
 
   // Use prototype's `.resizer` class by default; caller may override.
   const cls = className || "resizer";

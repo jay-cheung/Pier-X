@@ -165,7 +165,6 @@ function MySqlPanelBody({ tab }: Props) {
   // currentShellUser → sudo / sudo -u).
   const elev = useSudoElevation(tab);
   const [readOnly, setReadOnly] = useState(true);
-  const [writeConfirm, setWriteConfirm] = useState("");
   const [queryResult, setQueryResult] = useState<QueryExecutionResult | null>(null);
   const [plan, setPlan] = useState<PlanNode | null>(null);
   const [planMeta, setPlanMeta] = useState<string>("");
@@ -205,7 +204,6 @@ function MySqlPanelBody({ tab }: Props) {
     setQueryError("");
     setNotice("");
     setReadOnly(true);
-    setWriteConfirm("");
   }
 
   // Server-side paging — kept local; switching tables resets offset to 0.
@@ -221,6 +219,9 @@ function MySqlPanelBody({ tab }: Props) {
   ) {
     setBusy(true);
     setError("");
+    // Browsing a table takes the grid out of "query result" mode so the
+    // table's own (editable) rows show again instead of a stale query result.
+    setQueryResult(null);
     try {
       const tableTarget = draft ? null : (nextTable ?? state?.tableName ?? "").trim() || null;
       const tableChanged = tableTarget !== (state?.tableName ?? "");
@@ -392,7 +393,6 @@ function MySqlPanelBody({ tab }: Props) {
       sqlTabs.markActiveSaved();
       if (needsWrite) {
         setReadOnly(true);
-        setWriteConfirm("");
       }
     } catch (e) {
       setQueryResult(null);
@@ -580,7 +580,7 @@ function MySqlPanelBody({ tab }: Props) {
     hostReady &&
     sql.trim() !== "" &&
     !queryBusy &&
-    (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
+    (!needsWrite || !readOnly);
 
   // ── Splash rows ────────────────────────────────────────────
   const viaLabel = flow.sshTarget ? `${effectiveShellUser(tab, flow.sshTarget)}@${flow.sshTarget.host}` : t("direct · localhost");
@@ -1221,6 +1221,18 @@ function MySqlPanelBody({ tab }: Props) {
       </>
     ) : null;
 
+  // When a query has run and returned a result set, the grid shows it
+  // (read-only) instead of the browsed table. Writes return no columns and
+  // fall back to the table browse below.
+  const queryPreview =
+    queryResult && queryResult.columns.length > 0
+      ? {
+          columns: queryResult.columns,
+          rows: queryResult.rows,
+          truncated: queryResult.truncated,
+        }
+      : null;
+
   const resultToolbar = (
     <>
       {pagerToolbar}
@@ -1295,13 +1307,7 @@ function MySqlPanelBody({ tab }: Props) {
         sql={sql}
         onChange={setSql}
         writable={!readOnly}
-        onToggleWrite={() => {
-          setReadOnly((prev) => !prev);
-          setWriteConfirm("");
-        }}
-        needsWriteConfirm={needsWrite}
-        writeConfirm={writeConfirm}
-        onWriteConfirmChange={setWriteConfirm}
+        onToggleWrite={() => setReadOnly((prev) => !prev)}
         onRun={() => void runQuery()}
         canRun={canRun}
         running={queryBusy}
@@ -1349,24 +1355,25 @@ function MySqlPanelBody({ tab }: Props) {
         </>
       )}
       <DbResultGrid
-        preview={state.preview}
-        pkColumns={pkColumns}
-        numericColumns={numericColumns}
+        preview={queryPreview ?? state.preview}
+        pkColumns={queryPreview ? [] : pkColumns}
+        numericColumns={queryPreview ? [] : numericColumns}
         toolbar={resultToolbar}
         emptyLabel={
-          state.tableName ? t("No rows in this table.") : t("Pick a table from the tree to preview rows.")
+          queryPreview
+            ? t("Query returned no rows.")
+            : state.tableName
+              ? t("No rows in this table.")
+              : t("Pick a table from the tree to preview rows.")
         }
-        columnsMeta={gridColumns}
-        writable={!readOnly && state.tableName !== ""}
+        columnsMeta={queryPreview ? undefined : gridColumns}
+        writable={!readOnly && state.tableName !== "" && !queryPreview}
         onCommit={commitMutations}
         committing={committing}
-        onToggleWritable={() => {
-          setReadOnly((prev) => !prev);
-          setWriteConfirm("");
-        }}
-        onOpenRow={(row) => setOpenedRow(row)}
+        onToggleWritable={() => setReadOnly((prev) => !prev)}
+        onOpenRow={queryPreview ? undefined : (row) => setOpenedRow(row)}
         storageKey={
-          state.databaseName && state.tableName
+          !queryPreview && state.databaseName && state.tableName
             ? `mysql:${state.databaseName}.${state.tableName}`
             : undefined
         }

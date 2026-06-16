@@ -116,8 +116,15 @@ const MIN_SIDEBAR_W = 180;
 const MAX_SIDEBAR_W = 420;
 const MIN_RIGHT_PANEL_W = 260;
 const MIN_RIGHT_W = TOOLSTRIP_W + MIN_RIGHT_PANEL_W;
-const MAX_RIGHT_W = 900;
-const CENTER_RESERVED_W = 560;
+// Fallback center width, used only to seed a sane viewport guess before the real window
+// width is measured.
+const FALLBACK_CENTER_W = 560;
+// Resting minimum width for the center (terminal). The right splitter snaps: drag the
+// center below this and release → the terminal hides (two-column layout); drag back out
+// → it reappears at CENTER_MIN_W. The terminal is therefore never *left* narrower than
+// this, which is what keeps its content from reflowing into a deformed sliver (the xterm
+// grid floors at 48 columns, so anything much below this width would clip).
+const CENTER_MIN_W = 480;
 
 /** Parse a CSS <time> token ("200ms" / "0.2s") to milliseconds. */
 function cssMs(value: string): number {
@@ -135,25 +142,37 @@ function clampPaneWidth(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function centerReserveForViewport(viewportWidth: number, rightCollapsed: boolean): number {
-  const minRightFootprint = rightCollapsed ? TOOLSTRIP_W : MIN_RIGHT_W;
-  return Math.max(
-    0,
-    Math.min(CENTER_RESERVED_W, viewportWidth - MIN_SIDEBAR_W - minRightFootprint),
-  );
-}
-
+// Resolve the three column widths.
+//
+// - `centerCollapsed` (committed two-column state): the right panel fills everything to
+//   the right of the sidebar; the center is 0.
+// - otherwise the center is kept at least `centerFloor` wide by trimming the right panel
+//   (then the sidebar) when things don't fit. `centerFloor` is CENTER_MIN_W at rest, but
+//   0 mid-drag so the splitter can be pulled past the minimum toward a collapse.
+//
+// `centerReserve` is echoed back as the grid's `--center-min-w`.
 function normalizePaneWidths(
   sidebar: number,
   right: number,
   viewportWidth: number,
   rightCollapsed: boolean,
+  centerCollapsed: boolean,
+  centerFloor: number,
 ) {
-  const centerReserve = centerReserveForViewport(viewportWidth, rightCollapsed);
   let nextSidebar = clampPaneWidth(sidebar, MIN_SIDEBAR_W, MAX_SIDEBAR_W);
-  let nextRight = rightCollapsed ? right : clampPaneWidth(right, MIN_RIGHT_W, MAX_RIGHT_W);
+
+  if (centerCollapsed && !rightCollapsed) {
+    const fill = Math.max(MIN_RIGHT_W, viewportWidth - nextSidebar);
+    return { centerReserve: 0, sidebar: Math.round(nextSidebar), right: Math.round(fill) };
+  }
+
+  // Widest the right panel may get while the center keeps its floor.
+  const rightCeiling = Math.max(MIN_RIGHT_W, viewportWidth - nextSidebar - centerFloor);
+  let nextRight = rightCollapsed
+    ? right
+    : clampPaneWidth(right, MIN_RIGHT_W, rightCeiling);
   let overflow =
-    nextSidebar + (rightCollapsed ? TOOLSTRIP_W : nextRight) + centerReserve - viewportWidth;
+    nextSidebar + (rightCollapsed ? TOOLSTRIP_W : nextRight) + centerFloor - viewportWidth;
 
   if (overflow > 0 && !rightCollapsed) {
     const rightReduction = Math.min(overflow, nextRight - MIN_RIGHT_W);
@@ -167,7 +186,7 @@ function normalizePaneWidths(
   }
 
   return {
-    centerReserve,
+    centerReserve: centerFloor,
     sidebar: Math.round(nextSidebar),
     right: Math.round(nextRight),
   };
@@ -259,6 +278,23 @@ function App() {
       return false;
     }
   });
+  // The right panel has been dragged left far enough to swallow the whole
+  // center: the terminal is hidden and the shell is a two-column
+  // `sidebar | tool panel` layout. Persisted so a restart restores the shape.
+  const [centerCollapsed, setCenterCollapsed] = useState(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PANE_STORAGE_KEY) || "{}") as {
+        centerCollapsed?: boolean;
+      };
+      return stored.centerCollapsed ?? false;
+    } catch {
+      return false;
+    }
+  });
+  // True only while the right splitter is being dragged. During the drag the
+  // center may shrink below its resting minimum (the terminal is clipped, not
+  // reflowed); on mouseup it snaps to either hidden or >= CENTER_MIN_W.
+  const [isResizingRight, setIsResizingRight] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth || 0);
   const [fallbackRightTool, setFallbackRightTool] = useState<RightTool>("markdown");
   const tabs = useTabStore((s) => s.tabs);
@@ -400,6 +436,7 @@ function App() {
             sidebar: sidebarWidth,
             right: rightWidth,
             rightCollapsed,
+            centerCollapsed,
           }),
         );
       } catch {
@@ -407,7 +444,7 @@ function App() {
       }
     }, 250);
     return () => window.clearTimeout(id);
-  }, [rightWidth, sidebarWidth, rightCollapsed]);
+  }, [rightWidth, sidebarWidth, rightCollapsed, centerCollapsed]);
 
   // Persist sidebar browse path on change. Same 250ms debounce —
   // sidebar navigation can fire several setBrowserPath calls in a
@@ -889,7 +926,7 @@ function App() {
             const s = useThemeStoreRef.getState();
             s.setMode(s.resolvedDark ? "light" : "dark");
           } },
-          { label: rightCollapsed ? i18n.t("Show right panel") : i18n.t("Hide right panel"), action: () => setRightCollapsed((c) => !c) },
+          { label: rightCollapsed ? i18n.t("Show right panel") : i18n.t("Hide right panel"), action: () => { setRightCollapsed((c) => !c); setCenterCollapsed(false); } },
         ],
       },
       {
@@ -1061,12 +1098,22 @@ function App() {
   }, [rightCollapsed]);
 
   const layoutViewportWidth =
-    viewportWidth || MIN_SIDEBAR_W + MIN_RIGHT_W + CENTER_RESERVED_W;
+    viewportWidth || MIN_SIDEBAR_W + MIN_RIGHT_W + FALLBACK_CENTER_W;
+  // Committed two-column shape: center hidden, right panel filling its place. Suppressed
+  // mid-drag (so the splitter can pull the center back open) and when another mode already
+  // owns the center (right strip collapsed, or a full-bleed remote desktop).
+  const layoutCollapsed =
+    centerCollapsed && !isResizingRight && !rightCollapsed && !isRemoteDesktop;
+  // The center keeps CENTER_MIN_W at rest, but may be pulled to 0 mid-drag (it snaps to
+  // hidden or back to CENTER_MIN_W on release — see the right ResizeHandle below).
+  const centerFloor = isResizingRight ? 0 : CENTER_MIN_W;
   const normalizedPanes = normalizePaneWidths(
     sidebarWidth,
     rightWidth,
     layoutViewportWidth,
     rightCollapsed,
+    layoutCollapsed,
+    centerFloor,
   );
 
   useEffect(() => {
@@ -1086,6 +1133,9 @@ function App() {
 
   const rightPanelW = rightCollapsed ? 0 : Math.max(normalizedPanes.right - TOOLSTRIP_W, 0);
   const isRightCollapsed = rightCollapsed || rightPanelW === 0;
+  // Two-column shape (center swallowed): the right splitter now sits right on top of the
+  // left one, so we hide the left splitter while this holds (see pier-x.css).
+  const isCenterHidden = layoutCollapsed;
   const sidebarResizeMax = Math.max(
     MIN_SIDEBAR_W,
     Math.min(
@@ -1095,12 +1145,10 @@ function App() {
         normalizedPanes.centerReserve,
     ),
   );
+  // The right panel can be dragged until the center collapses to 0 (two-column layout).
   const rightResizeMax = Math.max(
     MIN_RIGHT_W,
-    Math.min(
-      MAX_RIGHT_W,
-      layoutViewportWidth - normalizedPanes.sidebar - normalizedPanes.centerReserve,
-    ),
+    layoutViewportWidth - normalizedPanes.sidebar,
   );
   const appStyle: React.CSSProperties = {
     ["--sidebar-w" as never]: `${normalizedPanes.sidebar}px`,
@@ -1113,8 +1161,8 @@ function App() {
       <Stage>
         <div
           className={`app${isRightCollapsed ? " is-right-collapsed" : ""}${
-            isRemoteDesktop ? " is-fullbleed" : ""
-          }`}
+            isCenterHidden ? " is-center-collapsed" : ""
+          }${isRemoteDesktop ? " is-fullbleed" : ""}`}
           style={appStyle}
         >
           <TopBar
@@ -1216,7 +1264,7 @@ function App() {
             onNewConnection={openNewConnectionDialog}
             onEditConnection={openEditConnectionDialog}
             collapsed={rightCollapsed}
-            onToggleCollapsed={() => setRightCollapsed((c) => !c)}
+            onToggleCollapsed={() => { setRightCollapsed((c) => !c); setCenterCollapsed(false); }}
           />
 
           <StatusBar
@@ -1245,9 +1293,24 @@ function App() {
               min={MIN_RIGHT_W}
               max={rightResizeMax}
               ariaLabel={i18n.t("Resize right panel")}
+              onResizeStart={() => setIsResizingRight(true)}
               onResize={(width) =>
                 setRightWidth(clampPaneWidth(width, MIN_RIGHT_W, rightResizeMax))
               }
+              onResizeEnd={(finalWidth) => {
+                setIsResizingRight(false);
+                // Snap: released with the center pulled below its resting minimum → hide
+                // it entirely (two-column). Otherwise keep the dragged width. Either way
+                // the terminal is never *left* narrower than CENTER_MIN_W, so its content
+                // can't settle into a reflowed/deformed sliver.
+                const center = layoutViewportWidth - normalizedPanes.sidebar - finalWidth;
+                if (center < CENTER_MIN_W) {
+                  setCenterCollapsed(true);
+                  setRightWidth(layoutViewportWidth - normalizedPanes.sidebar);
+                } else {
+                  setCenterCollapsed(false);
+                }
+              }}
             />
           )}
 

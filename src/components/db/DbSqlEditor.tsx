@@ -48,10 +48,6 @@ type Props = {
   onChange: (next: string) => void;
   writable: boolean;
   onToggleWrite: () => void;
-  /** When a write-class statement is typed, the user must retype "WRITE". */
-  needsWriteConfirm: boolean;
-  writeConfirm: string;
-  onWriteConfirmChange: (next: string) => void;
   onRun: () => void;
   canRun: boolean;
   running: boolean;
@@ -113,9 +109,6 @@ export default function DbSqlEditor({
   onChange,
   writable,
   onToggleWrite,
-  needsWriteConfirm,
-  writeConfirm,
-  onWriteConfirmChange,
   onRun,
   canRun,
   running,
@@ -604,14 +597,6 @@ export default function DbSqlEditor({
         <span className="sq-foot-hint">
           {writable ? t("DML/DDL will execute.") : t("Unlock to run INSERT/UPDATE/DELETE.")}
         </span>
-        {needsWriteConfirm && writable && (
-          <input
-            className="sq-confirm"
-            value={writeConfirm}
-            onChange={(e) => onWriteConfirmChange(e.currentTarget.value)}
-            placeholder={t("Type WRITE to confirm")}
-          />
-        )}
         <span className="sq-spacer" />
         <span className="sq-shortcut">⌘↵ {t("run")}</span>
         {onExplain && (

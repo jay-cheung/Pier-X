@@ -132,7 +132,6 @@ function SqlitePanelBody({ tab }: Props) {
   const sql = sqlTabs.sql;
   const setSql = sqlTabs.setSql;
   const [readOnly, setReadOnly] = useState(true);
-  const [writeConfirm, setWriteConfirm] = useState("");
   const [state, setState] = useState<SqliteBrowserState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -267,11 +266,14 @@ function SqlitePanelBody({ tab }: Props) {
     canBrowse &&
     sql.trim() !== "" &&
     !queryBusy &&
-    (!needsWrite || (!readOnly && writeConfirm.trim().toUpperCase() === "WRITE"));
+    (!needsWrite || !readOnly);
 
   async function browse(nextTable = tableName, explicitPath?: string) {
     setBusy(true);
     setError("");
+    // Browsing a table takes the grid out of "query result" mode so the
+    // table's own (editable) rows show again instead of a stale query result.
+    setQueryResult(null);
     const usePath = (explicitPath ?? path).trim();
     try {
       if (isRemoteMode && sshTarget) {
@@ -378,9 +380,14 @@ function SqlitePanelBody({ tab }: Props) {
       sqlTabs.markActiveSaved();
       if (needsWrite) {
         setReadOnly(true);
-        setWriteConfirm("");
       }
-      void browse(tableName);
+      // A pure write returns no result set — refresh the table browse so the
+      // grid reflects the change. A SELECT (or a write … RETURNING) keeps its
+      // own result on screen: the grid prefers queryResult over the table
+      // preview, and browsing here would clobber it.
+      if (r.columns.length === 0) {
+        void browse(tableName);
+      }
     } catch (e) {
       setQueryResult(null);
       const raw = e instanceof Error ? e.message : String(e);
@@ -899,6 +906,18 @@ function SqlitePanelBody({ tab }: Props) {
     </DismissibleNote>
   ) : null;
 
+  // When a query has run and returned a result set, the grid shows it
+  // (read-only) instead of the browsed table. Writes return no columns and
+  // fall back to the table browse below.
+  const queryPreview =
+    queryResult && queryResult.columns.length > 0
+      ? {
+          columns: queryResult.columns,
+          rows: queryResult.rows,
+          truncated: queryResult.truncated,
+        }
+      : null;
+
   const resultToolbar = queryResult ? (
     <button
       type="button"
@@ -919,13 +938,7 @@ function SqlitePanelBody({ tab }: Props) {
         sql={sql}
         onChange={setSql}
         writable={!readOnly}
-        onToggleWrite={() => {
-          setReadOnly((p) => !p);
-          setWriteConfirm("");
-        }}
-        needsWriteConfirm={Boolean(needsWrite)}
-        writeConfirm={writeConfirm}
-        onWriteConfirmChange={setWriteConfirm}
+        onToggleWrite={() => setReadOnly((p) => !p)}
         onRun={() => void runQuery()}
         canRun={canRun}
         running={queryBusy}
@@ -943,23 +956,22 @@ function SqlitePanelBody({ tab }: Props) {
         onAiGenerate={onAiGenerate}
       />
       <DbResultGrid
-        preview={state.preview}
-        pkColumns={pkColumns}
-        numericColumns={numericColumns}
+        preview={queryPreview ?? state.preview}
+        pkColumns={queryPreview ? [] : pkColumns}
+        numericColumns={queryPreview ? [] : numericColumns}
         toolbar={resultToolbar}
         emptyLabel={
-          state.tableName
-            ? t("No rows in this table.")
-            : t("Pick a table from the tree to preview rows.")
+          queryPreview
+            ? t("Query returned no rows.")
+            : state.tableName
+              ? t("No rows in this table.")
+              : t("Pick a table from the tree to preview rows.")
         }
-        columnsMeta={gridColumns}
-        writable={!readOnly && state.tableName !== ""}
+        columnsMeta={queryPreview ? undefined : gridColumns}
+        writable={!readOnly && state.tableName !== "" && !queryPreview}
         onCommit={commitMutations}
         committing={committing}
-        onToggleWritable={() => {
-          setReadOnly((p) => !p);
-          setWriteConfirm("");
-        }}
+        onToggleWritable={() => setReadOnly((p) => !p)}
       />
       {queryError && (
         <div className="db-panel-banner">

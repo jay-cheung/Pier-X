@@ -15,8 +15,10 @@
   container-name: dbs;
 }
 .dbs-inner {
-  max-width: 720px;
-  margin: 0 auto;
+  /* Fill the panel — the right zone can be dragged very wide, and capping +
+   * centering this block left a large empty gutter on either side. Long-form
+   * text inside (.dbs-sub) keeps its own readable max-width. */
+  width: 100%;
 }
 .dbs-head {
   display: flex;

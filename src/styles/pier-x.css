@@ -108,6 +108,10 @@ body.is-panel-animating .rightzone {
 .resizer.is-left { left: calc(var(--sidebar-w) - 2px); }
 .resizer.is-right { right: calc(var(--rightpanel-w) + var(--toolstrip-w) - 2px); }
 .app.is-right-collapsed .resizer.is-right { display: none; }
+/* Right panel dragged left until it fully covers the center: its splitter now sits exactly
+ * on top of the sidebar splitter. Hide the left one so the shared boundary unambiguously
+ * means "drag the tool panel back open" and re-reveals the center. */
+.app.is-center-collapsed .resizer.is-left { display: none; }
 
 /* Remote-desktop takeover: collapse the right column to 0 and hide the right
  * zone + its splitter so the canvas spans from the sidebar edge to the window

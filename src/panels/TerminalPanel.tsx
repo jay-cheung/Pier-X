@@ -676,8 +676,20 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     const measure = measureRef.current;
     if (!viewport || !measure) return;
 
+    let resizeDebounce: number | null = null;
+
     const recalculate = () => {
       if (!isActive) return;
+      // Don't reflow the terminal grid mid-drag. A live splitter drag transiently
+      // makes the viewport very narrow; refitting to that width would clamp to the
+      // 48-column floor and visibly deform the content. Defer (re-arming) until the
+      // drag settles — the pane then snaps to either hidden or a comfortable width,
+      // and we fit to that final size.
+      if (document.body.classList.contains("is-resizing")) {
+        if (resizeDebounce !== null) window.clearTimeout(resizeDebounce);
+        resizeDebounce = window.setTimeout(recalculate, 100);
+        return;
+      }
       if (viewport.clientWidth <= 0 || viewport.clientHeight <= 0) return;
       const measureBox = measure.getBoundingClientRect();
       const charWidth = measureBox.width / 10 || 7.8;
@@ -722,7 +734,6 @@ function TerminalPanel({ tab, isActive, onEditConnection }: Props) {
     // PTY resize, which is the real source of the toggle/drag jank. The
     // direct recalculate() above keeps mount / tab-switch / font changes
     // responsive (this effect re-runs on those via its deps).
-    let resizeDebounce: number | null = null;
     const observer = new ResizeObserver(() => {
       if (resizeDebounce !== null) window.clearTimeout(resizeDebounce);
       resizeDebounce = window.setTimeout(() => {

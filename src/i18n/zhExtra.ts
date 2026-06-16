@@ -857,6 +857,10 @@ export const zhExtra: Record<string, string> = {
   "Remove directory {name}? Contents will be deleted.": "删除目录 {name}？目录内容将一并删除。",
   "notes.md": "notes.md",
 
+  // Sidebar — saved server deletion confirm
+  "Delete connection": "删除连接",
+  "Delete connection {name}?": "确认删除连接「{name}」？",
+
   // SFTP — chmod dialog
   "Read": "读",
   "Write": "写",
@@ -987,6 +991,7 @@ export const zhExtra: Record<string, string> = {
   "No rows to show.": "暂无数据。",
   "Select a row to inspect.": "选择一行以查看详情。",
   "Pick a table from the tree to preview rows.": "从左侧结构树选择一张表以预览数据。",
+  "Query returned no rows.": "查询无结果。",
   "Filter": "筛选",
   "filtered from {total}": "从 {total} 行筛选",
   "Page": "第",
