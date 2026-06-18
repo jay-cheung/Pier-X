@@ -163,23 +163,38 @@ async fn run_session(
     input_rx: UnboundedReceiver<InputEvent>,
     control_rx: UnboundedReceiver<ControlMsg>,
 ) {
-    let result = match config.protocol {
-        RemoteProtocol::Vnc => vnc::run(config, sink.clone(), input_rx, control_rx).await,
-        // FreeRDP supersedes IronRDP for the RDP protocol when its (experimental)
-        // feature is compiled in — it adds the real H.264/AVC444 path IronRDP lacks.
-        #[cfg(feature = "rdp-freerdp")]
-        RemoteProtocol::Rdp => rdp_freerdp::run(config, sink.clone(), input_rx, control_rx).await,
-        #[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
-        RemoteProtocol::Rdp => rdp::run(config, sink.clone(), input_rx, control_rx).await,
-        #[cfg(all(not(feature = "rdp"), not(feature = "rdp-freerdp")))]
-        RemoteProtocol::Rdp => Err(RemoteDesktopError::Unsupported(
-            "RDP support was not compiled into this build".to_string(),
-        )),
-    };
+    // Drive the backend on its own task so a *panic* surfaces via the
+    // JoinHandle. If it panicked inline, the unwind would skip the terminal
+    // `Disconnected` below and the handle is never joined elsewhere — the
+    // panic would be swallowed, leaving the UI stuck on "connecting" forever.
+    let backend_sink = sink.clone();
+    let backend = runtime::shared().spawn(async move {
+        match config.protocol {
+            RemoteProtocol::Vnc => vnc::run(config, backend_sink, input_rx, control_rx).await,
+            // FreeRDP supersedes IronRDP for the RDP protocol when its (experimental)
+            // feature is compiled in — it adds the real H.264/AVC444 path IronRDP lacks.
+            #[cfg(feature = "rdp-freerdp")]
+            RemoteProtocol::Rdp => {
+                rdp_freerdp::run(config, backend_sink, input_rx, control_rx).await
+            }
+            #[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
+            RemoteProtocol::Rdp => rdp::run(config, backend_sink, input_rx, control_rx).await,
+            #[cfg(all(not(feature = "rdp"), not(feature = "rdp-freerdp")))]
+            RemoteProtocol::Rdp => Err(RemoteDesktopError::Unsupported(
+                "RDP support was not compiled into this build".to_string(),
+            )),
+        }
+    });
 
-    let reason = match result {
-        Ok(()) => None,
-        Err(err) => Some(err.to_string()),
+    let reason = match backend.await {
+        Ok(Ok(())) => None,
+        Ok(Err(err)) => Some(err.to_string()),
+        // A panic still yields a terminal event so the host leaves the
+        // connecting/connected state; a plain cancellation (teardown) does not.
+        Err(join_err) if join_err.is_panic() => {
+            Some("remote-desktop session terminated unexpectedly".to_string())
+        }
+        Err(_) => None,
     };
     sink.emit(FrameEvent::Disconnected(reason));
 }

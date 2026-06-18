@@ -9,6 +9,8 @@
 //! Username/password (NTLM) auth therefore works; domain-Kerberos is a
 //! follow-up.
 
+use std::time::Duration;
+
 use ironrdp::connector::{self, ClientConnector, Credentials, ServerName};
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::input::{Database, MousePosition, Operation, Scancode, WheelRotations};
@@ -29,6 +31,13 @@ use super::frame::{self, FrameEvent, FrameSink};
 use super::input::{InputEvent, MouseButton};
 use super::{ControlMsg, RemoteDesktopConfig};
 
+/// Upper bound on the whole RDP connect handshake (TCP → X.224 → TLS →
+/// CredSSP/NLA → capability exchange). A reachable-but-silent host (firewall
+/// drops the SYN instead of refusing) or a wedged NLA negotiation would
+/// otherwise leave the task parked on an `.await` with no terminal event,
+/// stranding the UI on "connecting" forever.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Drive one RDP connection to completion.
 pub(crate) async fn run(
     config: RemoteDesktopConfig,
@@ -39,46 +48,61 @@ pub(crate) async fn run(
     let jpeg_threshold = config.jpeg_threshold_px;
     let server_name = config.host.clone();
 
-    // ── TCP + connector ──────────────────────────────────────────────
-    let stream = TcpStream::connect((config.host.as_str(), config.port))
+    // The full connect handshake runs under one deadline so a stalled stage
+    // becomes an error the host can show, not an indefinite hang.
+    let handshake = async {
+        // ── TCP + connector ──────────────────────────────────────────────
+        let stream = TcpStream::connect((config.host.as_str(), config.port))
+            .await
+            .map_err(|e| RemoteDesktopError::Connect(format!("{}:{}: {e}", config.host, config.port)))?;
+        stream.set_nodelay(true).ok();
+        let client_addr = stream
+            .local_addr()
+            .map_err(|e| RemoteDesktopError::Connect(format!("local addr: {e}")))?;
+        let mut framed = TokioFramed::new(stream);
+
+        let mut connector = ClientConnector::new(build_config(&config), client_addr);
+
+        // ── X.224 negotiation up to the TLS boundary ─────────────────────
+        let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
+            .await
+            .map_err(|e| RemoteDesktopError::Connect(format!("RDP negotiation: {}", describe_err(&e))))?;
+
+        // ── TLS upgrade ──────────────────────────────────────────────────
+        let initial_stream = framed.into_inner_no_leftover();
+        let (upgraded_stream, tls_cert) = ironrdp_tls::upgrade(initial_stream, &server_name)
+            .await
+            .map_err(|e| RemoteDesktopError::Connect(format!("TLS upgrade: {e}")))?;
+        let server_public_key = ironrdp_tls::extract_tls_server_public_key(&tls_cert)
+            .ok_or_else(|| RemoteDesktopError::Connect("unable to extract TLS server public key".to_string()))?;
+        let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
+        let mut upgraded_framed = TokioFramed::new(upgraded_stream);
+
+        // ── Finalize: CredSSP/NLA, MCS, capabilities, licensing ──────────
+        let mut network_client = ReqwestNetworkClient::new();
+        let connection_result = ironrdp_tokio::connect_finalize(
+            upgraded,
+            connector,
+            &mut upgraded_framed,
+            &mut network_client,
+            ServerName::new(&server_name),
+            server_public_key.to_owned(),
+            None,
+        )
         .await
-        .map_err(|e| RemoteDesktopError::Connect(format!("{}:{}: {e}", config.host, config.port)))?;
-    stream.set_nodelay(true).ok();
-    let client_addr = stream
-        .local_addr()
-        .map_err(|e| RemoteDesktopError::Connect(format!("local addr: {e}")))?;
-    let mut framed = TokioFramed::new(stream);
+        .map_err(|e| RemoteDesktopError::Auth(format!("RDP activation: {}", describe_err(&e))))?;
 
-    let mut connector = ClientConnector::new(build_config(&config), client_addr);
+        Ok::<_, RemoteDesktopError>((connection_result, upgraded_framed))
+    };
 
-    // ── X.224 negotiation up to the TLS boundary ─────────────────────
-    let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
+    let (connection_result, upgraded_framed) = tokio::time::timeout(CONNECT_TIMEOUT, handshake)
         .await
-        .map_err(|e| RemoteDesktopError::Connect(format!("RDP negotiation: {}", describe_err(&e))))?;
-
-    // ── TLS upgrade ──────────────────────────────────────────────────
-    let initial_stream = framed.into_inner_no_leftover();
-    let (upgraded_stream, tls_cert) = ironrdp_tls::upgrade(initial_stream, &server_name)
-        .await
-        .map_err(|e| RemoteDesktopError::Connect(format!("TLS upgrade: {e}")))?;
-    let server_public_key = ironrdp_tls::extract_tls_server_public_key(&tls_cert)
-        .ok_or_else(|| RemoteDesktopError::Connect("unable to extract TLS server public key".to_string()))?;
-    let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
-    let mut upgraded_framed = TokioFramed::new(upgraded_stream);
-
-    // ── Finalize: CredSSP/NLA, MCS, capabilities, licensing ──────────
-    let mut network_client = ReqwestNetworkClient::new();
-    let connection_result = ironrdp_tokio::connect_finalize(
-        upgraded,
-        connector,
-        &mut upgraded_framed,
-        &mut network_client,
-        ServerName::new(&server_name),
-        server_public_key.to_owned(),
-        None,
-    )
-    .await
-    .map_err(|e| RemoteDesktopError::Auth(format!("RDP activation: {}", describe_err(&e))))?;
+        .map_err(|_| {
+            RemoteDesktopError::Connect(format!(
+                "{}:{}: connection timed out after {}s",
+                config.host, config.port, CONNECT_TIMEOUT.as_secs()
+            ))
+        })??;
 
     let desktop = connection_result.desktop_size;
     let mut image = DecodedImage::new(PixelFormat::RgbA32, desktop.width, desktop.height);
