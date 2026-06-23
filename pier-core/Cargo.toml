@@ -94,9 +94,19 @@ redis = { version = "1.2", default-features = false, features = [
 # PostgreSQL client for the M7a panel. `tokio-postgres` is
 # the canonical async PG client in the Rust ecosystem. Default
 # features pull in `runtime` (tokio net+time) which we already
-# have via the shared runtime. No TLS — same rationale as MySQL
-# and Redis: the SSH tunnel encrypts the transport.
+# have via the shared runtime. TLS is opt-in per connection (see
+# `db_tls::TlsMode`, default off) — the SSH tunnel remains the
+# encouraged path; direct cleartext to a non-loopback host is the
+# case `require`/`verify-full` protect.
 tokio-postgres = "0.7"
+# Opt-in TLS for the direct (non-tunneled) PostgreSQL path. Pinned to the
+# same rustls 0.23 already in the tree (ironrdp-tls / ureq), so no second
+# rustls stack is added for PG. `ring` selects an explicit crypto provider
+# (both ring + aws-lc-rs are present transitively, so the default is
+# ambiguous and must be named) — `webpki-roots` backs `verify-full`.
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
 
 # Git graph engine — libgit2 binding for in-process ref
 # decoration, revwalk, tree diff, and branch enumeration.
@@ -125,12 +135,13 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 mysql_async = { version = "0.36", default-features = false, features = ["minimal-rust"] }
 
 # Microsoft SQL Server (TDS) client for the unified database panel's
-# SQL Server product. `tiberius` is the pure-Rust TDS driver. Built
-# WITHOUT its TLS features — we connect with encryption disabled through
-# the SSH tunnel, same rationale as MySQL/Postgres/Redis. `chrono` +
-# `rust_decimal` let DATETIME / DECIMAL columns stringify properly
-# instead of falling back to a type placeholder.
-tiberius = { version = "0.12", default-features = false, features = ["tds73", "chrono", "rust_decimal"] }
+# SQL Server product. `tiberius` is the pure-Rust TDS driver. The
+# `rustls` feature gives it opt-in TLS (see `db_tls::TlsMode`, default
+# off) — tiberius drives its own rustls stack internally, so we only set
+# the `EncryptionLevel` + whether to trust the cert. (That stack is
+# rustls 0.21, independent of the rustls 0.23 used elsewhere.) `chrono` +
+# `rust_decimal` let DATETIME / DECIMAL columns stringify properly.
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "chrono", "rust_decimal", "rustls"] }
 # Already pulled in by the tiberius features above — declared directly so
 # we can name `chrono::NaiveDateTime` / `rust_decimal::Decimal` when
 # stringifying SQL Server DATETIME / DECIMAL columns. Versions unify with

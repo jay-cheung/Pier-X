@@ -39,6 +39,7 @@ pub mod apache;
 pub mod caddy;
 pub mod code_search;
 pub mod compose_k8s;
+pub mod db_tls;
 pub mod docker;
 pub mod firewall;
 pub mod git;

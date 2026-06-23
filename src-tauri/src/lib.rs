@@ -7144,6 +7144,7 @@ fn postgres_browse_blocking(
         user: resolved_user.to_string(),
         password,
         database: database.clone().filter(|v| !v.trim().is_empty()),
+        tls_mode: pier_core::services::db_tls::TlsMode::Off,
     })
     .map_err(|e| e.to_string())?;
 
@@ -7569,6 +7570,7 @@ async fn postgres_execute(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7637,6 +7639,7 @@ async fn mssql_execute(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7663,6 +7666,7 @@ async fn mssql_overview(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7710,6 +7714,7 @@ async fn mssql_columns(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
 
@@ -7999,6 +8004,7 @@ async fn postgres_list_activity(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
         client.list_activity_blocking().map_err(|e| e.to_string())
@@ -8027,6 +8033,7 @@ async fn postgres_cancel_query(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
         client.cancel_query_blocking(pid).map_err(|e| e.to_string())
@@ -8053,6 +8060,7 @@ async fn postgres_terminate_backend(
             user: user.trim().to_string(),
             password,
             database: database.filter(|v| !v.trim().is_empty()),
+            tls_mode: pier_core::services::db_tls::TlsMode::Off,
         })
         .map_err(|e| e.to_string())?;
         client
@@ -8129,6 +8137,7 @@ async fn db_test_connection(
                     user: user_trim.to_string(),
                     password,
                     database: database.filter(|v| !v.trim().is_empty()),
+                    tls_mode: pier_core::services::db_tls::TlsMode::Off,
                 })
                 .map_err(|e| e.to_string())?;
                 let version = client

@@ -70,6 +70,11 @@ pub struct SqlServerConfig {
     pub password: String,
     /// Initial database. Empty = the login's default database.
     pub database: Option<String>,
+    /// TLS for a direct (non-tunneled) connection. Defaults to
+    /// [`TlsMode::Off`](super::db_tls::TlsMode::Off) so existing tunneled
+    /// connections keep encryption disabled exactly as before.
+    #[serde(default)]
+    pub tls_mode: super::db_tls::TlsMode,
 }
 
 /// Full query result. Same shape as [`super::postgres::QueryResult`].
@@ -155,9 +160,24 @@ impl SqlServerClient {
         if let Some(db) = config.database.as_ref().filter(|d| !d.is_empty()) {
             cfg.database(db);
         }
-        // No TLS feature compiled in — the tunnel encrypts the transport.
-        cfg.encryption(EncryptionLevel::NotSupported);
-        cfg.trust_cert();
+        // TLS is opt-in per connection. `Off` keeps encryption disabled
+        // (the tunnel encrypts the transport, the historical default);
+        // `Require` encrypts but trusts any cert; `VerifyFull` encrypts and
+        // verifies against the OS native roots (tiberius drives rustls).
+        match config.tls_mode {
+            super::db_tls::TlsMode::Off => {
+                cfg.encryption(EncryptionLevel::NotSupported);
+                cfg.trust_cert();
+            }
+            super::db_tls::TlsMode::Require => {
+                cfg.encryption(EncryptionLevel::Required);
+                cfg.trust_cert();
+            }
+            super::db_tls::TlsMode::VerifyFull => {
+                cfg.encryption(EncryptionLevel::Required);
+                // No trust_cert() → tiberius verifies the server certificate.
+            }
+        }
 
         let addr = cfg.get_addr();
         let tcp = TcpStream::connect(addr)

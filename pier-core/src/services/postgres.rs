@@ -76,6 +76,11 @@ pub struct PostgresConfig {
     pub password: String,
     /// Default database. Empty = connect to the user's default.
     pub database: Option<String>,
+    /// TLS for a direct (non-tunneled) connection. Defaults to
+    /// [`TlsMode::Off`](super::db_tls::TlsMode::Off) so existing tunneled
+    /// connections are unchanged.
+    #[serde(default)]
+    pub tls_mode: super::db_tls::TlsMode,
 }
 
 /// One user-defined enum type in the active schema. Used by the
@@ -283,17 +288,30 @@ impl PostgresClient {
             pg_config.dbname(db);
         }
 
-        let (client, connection) = pg_config.connect(NoTls).await?;
-
-        // Spawn the connection future onto the shared runtime.
-        // Errors from the connection are logged but don't
-        // propagate — the Client's next query will surface
-        // the break.
-        let conn_handle = crate::ssh::runtime::shared().spawn(async move {
-            if let Err(e) = connection.await {
-                log::warn!("postgres connection error: {e}");
-            }
-        });
+        // Spawn the connection future onto the shared runtime. Errors from
+        // the connection are logged but don't propagate — the Client's next
+        // query surfaces the break. `Off` uses plain `NoTls` (unchanged);
+        // `Require`/`VerifyFull` wrap the socket in rustls.
+        let (client, conn_handle) = if config.tls_mode.is_off() {
+            let (client, connection) = pg_config.connect(NoTls).await?;
+            let handle = crate::ssh::runtime::shared().spawn(async move {
+                if let Err(e) = connection.await {
+                    log::warn!("postgres connection error: {e}");
+                }
+            });
+            (client, handle)
+        } else {
+            let tls_config = super::db_tls::pg_rustls_config(config.tls_mode)
+                .map_err(PostgresError::InvalidConfig)?;
+            let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_config);
+            let (client, connection) = pg_config.connect(tls).await?;
+            let handle = crate::ssh::runtime::shared().spawn(async move {
+                if let Err(e) = connection.await {
+                    log::warn!("postgres connection error: {e}");
+                }
+            });
+            (client, handle)
+        };
 
         // Round-trip probe.
         client.simple_query("SELECT 1").await?;
@@ -1044,6 +1062,7 @@ mod tests {
             user: "root".into(),
             password: "".into(),
             database: None,
+            tls_mode: Default::default(),
         }));
         assert!(matches!(r, Err(PostgresError::InvalidConfig(_))));
     }
@@ -1056,6 +1075,7 @@ mod tests {
             user: "root".into(),
             password: "".into(),
             database: None,
+            tls_mode: Default::default(),
         }));
         assert!(matches!(r, Err(PostgresError::InvalidConfig(_))));
     }
@@ -1068,6 +1088,7 @@ mod tests {
             user: "".into(),
             password: "".into(),
             database: None,
+            tls_mode: Default::default(),
         }));
         assert!(matches!(r, Err(PostgresError::InvalidConfig(_))));
     }
