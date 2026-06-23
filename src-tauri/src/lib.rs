@@ -5393,49 +5393,57 @@ static HOST_KEY_PROMPT: OnceLock<Arc<HostKeyPromptState>> = OnceLock::new();
 /// has run, or from a unit test that loads this module).
 fn host_key_verifier() -> HostKeyVerifier {
     let base = HostKeyVerifier::default();
-    match HOST_KEY_PROMPT.get().cloned() {
-        Some(state) => {
-            let cb: HostKeyPromptCb = Arc::new(move |req: HostKeyPromptRequest| {
-                let state = state.clone();
-                Box::pin(async move {
-                    let id = format!("khp-{}", state.next_id.fetch_add(1, Ordering::Relaxed),);
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    if let Ok(mut map) = state.pending.lock() {
-                        map.insert(id.clone(), tx);
-                    } else {
-                        return HostKeyDecision::Reject;
-                    }
-
-                    let payload = serde_json::json!({
-                        "id": id,
-                        "request": req,
-                    });
-                    if state.app.emit("ssh:host-key-prompt", &payload).is_err() {
-                        // No webview to dispatch to (early-exit
-                        // race during shutdown). Fail closed.
-                        if let Ok(mut map) = state.pending.lock() {
-                            map.remove(&id);
-                        }
-                        return HostKeyDecision::Reject;
-                    }
-
-                    // 3-minute ceiling so a forgotten dialog
-                    // can't pin SSH worker threads forever.
-                    match tokio::time::timeout(Duration::from_secs(180), rx).await {
-                        Ok(Ok(decision)) => decision,
-                        _ => {
-                            if let Ok(mut map) = state.pending.lock() {
-                                map.remove(&id);
-                            }
-                            HostKeyDecision::Reject
-                        }
-                    }
-                })
-            });
-            base.with_prompt(cb)
-        }
+    match host_key_prompt_cb() {
+        Some(cb) => base.with_prompt(cb),
         None => base,
     }
+}
+
+/// Build the "trust this host/cert?" prompt callback that routes through the
+/// React dialog (the `ssh:host-key-prompt` event + `ssh_host_key_decide`
+/// command). Reused by SSH host-key verification and RDP certificate
+/// pinning. `None` before the setup hook has installed the app handle —
+/// callers then fall back to silent accept-new TOFU.
+pub(crate) fn host_key_prompt_cb() -> Option<HostKeyPromptCb> {
+    let state = HOST_KEY_PROMPT.get().cloned()?;
+    let cb: HostKeyPromptCb = Arc::new(move |req: HostKeyPromptRequest| {
+        let state = state.clone();
+        Box::pin(async move {
+            let id = format!("khp-{}", state.next_id.fetch_add(1, Ordering::Relaxed),);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if let Ok(mut map) = state.pending.lock() {
+                map.insert(id.clone(), tx);
+            } else {
+                return HostKeyDecision::Reject;
+            }
+
+            let payload = serde_json::json!({
+                "id": id,
+                "request": req,
+            });
+            if state.app.emit("ssh:host-key-prompt", &payload).is_err() {
+                // No webview to dispatch to (early-exit
+                // race during shutdown). Fail closed.
+                if let Ok(mut map) = state.pending.lock() {
+                    map.remove(&id);
+                }
+                return HostKeyDecision::Reject;
+            }
+
+            // 3-minute ceiling so a forgotten dialog
+            // can't pin worker threads forever.
+            match tokio::time::timeout(Duration::from_secs(180), rx).await {
+                Ok(Ok(decision)) => decision,
+                _ => {
+                    if let Ok(mut map) = state.pending.lock() {
+                        map.remove(&id);
+                    }
+                    HostKeyDecision::Reject
+                }
+            }
+        })
+    });
+    Some(cb)
 }
 
 /// Run `rg` (preferred) or `git grep` (fallback) in the active

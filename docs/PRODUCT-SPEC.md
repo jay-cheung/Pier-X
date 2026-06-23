@@ -1014,8 +1014,8 @@ AI 通过 tool-use 协议调用 Pier-X 已有能力——**不新开能力面，
 
 - **协议**：保存的连接新增 `protocol` 字段（`ssh` / `rdp` / `vnc`）。新建连接对话框顶部选择协议；`ssh` 打开终端，`rdp` / `vnc` 打开远程桌面 tab。侧边栏连接行按协议显示图标（终端 / 显示器），双击或右键「打开远程桌面」启动。
 - **后端**（`pier-core/src/remote_desktop/`，UI 无关）：
-  - RDP 默认经 **IronRDP**（headless，NLA/CredSSP；用户名+密码 NTLM 认证；纯 Rust，无 H.264）。
-  - RDP 可选经 **FreeRDP 3**（`rdp-freerdp` feature，默认关闭，实验中）：经 `freerdp-sys`（vendored libfreerdp3 源码构建）走 MS-RDPEGFX **H.264 / AVC420 / AVC444** 图形管道，OS 原生解码（Windows Media Foundation / macOS VideoToolbox(经 FFmpeg) / Linux OpenH264·FFmpeg），解码到 GDI BGRA/RGBX 缓冲后切脏矩形输出——与 IronRDP/VNC 同一个 `FrameSink` 接口，src-tauri 与前端不变。启用后取代 IronRDP 作为 RDP 协议实现。
+  - RDP 默认经 **IronRDP**（headless，NLA/CredSSP；用户名+密码 NTLM 认证；纯 Rust，无 H.264）。**证书校验**：服务端公钥在 TLS 升级后、CredSSP 发送凭据前做 **TOFU 固定**（`remote_desktop/cert_pins.rs`，存 `rdp_known_certs.json`）——首次连接记录、后续失配阻断，复用 SSH host-key 的「信任此主机？」对话框（`ssh:host-key-prompt`），不再无条件接受任意证书。
+  - RDP 可选经 **FreeRDP 3**（`rdp-freerdp` feature，默认关闭，实验中）：经 `freerdp-sys`（vendored libfreerdp3 源码构建）走 MS-RDPEGFX **H.264 / AVC420 / AVC444** 图形管道，OS 原生解码（Windows Media Foundation / macOS VideoToolbox(经 FFmpeg) / Linux OpenH264·FFmpeg），解码到 GDI BGRA/RGBX 缓冲后切脏矩形输出——与 IronRDP/VNC 同一个 `FrameSink` 接口，src-tauri 与前端不变。启用后取代 IronRDP 作为 RDP 协议实现。**证书校验**：仍为 `FreeRDP_IgnoreCertificate`，TOFU 固定（经 `VerifyCertificateEx` FFI 回调接入 `cert_pins`）待后续实现——该后端实验性、默认关闭。
   - VNC 为自实现 RFB 3.8 客户端，支持 None / VNCAuth(DES) / **Apple ARD(type 30，DH+MD5+AES-128)** 三种安全类型——后者用于现代 macOS「屏幕共享」；编码支持 Raw / CopyRect / Zlib / DesktopSize。
   - 会话运行在共享 tokio runtime，脏矩形帧经回调 sink 输出（大块 JPEG，小块原始 RGBA）。连接失败的英文原因在前端经 `diagnoseRemoteDesktopError` 映射为可读诊断（超时 / 端口拒绝 / 仅旧式 RC4 / Kerberos 不支持 / 登录被拒 / TLS 失败等）。
 - **传输**：帧以二进制 `tauri::ipc::Channel` 推送（`Response::new(Vec<u8>)` → ArrayBuffer，无 base64）；输入经 `remote_desktop_input` 命令回传，键码用 noVNC 风格的 scancode/keysym 表映射。

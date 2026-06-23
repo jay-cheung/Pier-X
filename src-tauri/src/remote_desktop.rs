@@ -185,7 +185,15 @@ pub fn remote_desktop_connect(
         let _ = channel.send(Response::new(encode_packet(&event)));
     });
 
-    let session = RemoteDesktopSession::connect(config, sink).map_err(|e| e.to_string())?;
+    // For RDP, route unknown / changed server certificates through the same
+    // "trust this host?" dialog as SSH host keys (TOFU pinning). VNC has no
+    // TLS layer, so it gets no prompt.
+    let cert_prompt = match protocol {
+        RemoteProtocol::Rdp => crate::host_key_prompt_cb(),
+        RemoteProtocol::Vnc => None,
+    };
+    let session =
+        RemoteDesktopSession::connect(config, sink, cert_prompt).map_err(|e| e.to_string())?;
 
     let id = format!(
         "rd-{}",

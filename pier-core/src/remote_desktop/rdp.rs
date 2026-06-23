@@ -44,6 +44,7 @@ pub(crate) async fn run(
     sink: FrameSink,
     mut input_rx: UnboundedReceiver<InputEvent>,
     mut control_rx: UnboundedReceiver<ControlMsg>,
+    cert_prompt: Option<super::CertPromptCb>,
 ) -> Result<()> {
     let jpeg_threshold = config.jpeg_threshold_px;
     let server_name = config.host.clone();
@@ -75,6 +76,15 @@ pub(crate) async fn run(
             .map_err(|e| RemoteDesktopError::Connect(format!("TLS upgrade: {e}")))?;
         let server_public_key = ironrdp_tls::extract_tls_server_public_key(&tls_cert)
             .ok_or_else(|| RemoteDesktopError::Connect("unable to extract TLS server public key".to_string()))?;
+
+        // ── TOFU certificate pinning ─────────────────────────────────────
+        // The TLS upgrade above does NOT verify the server certificate, so
+        // pin the server public key (like an SSH host key) and check it
+        // BEFORE CredSSP/NLA runs — credentials are never sent to a server
+        // that fails verification. Without a prompt callback: accept-new on
+        // first contact, hard-fail on a changed key (possible MITM).
+        verify_server_key(&config, server_public_key, &cert_prompt).await?;
+
         let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
         let mut upgraded_framed = TokioFramed::new(upgraded_stream);
 
@@ -282,6 +292,62 @@ fn describe_err<E: std::error::Error>(err: &E) -> String {
         src = inner.source();
     }
     out
+}
+
+/// TOFU-verify the server's public key against the pin store, consulting
+/// the prompt callback for unknown / changed keys. Errors (rejecting the
+/// connection) when the key is untrusted, so the caller aborts before
+/// CredSSP/NLA sends credentials.
+async fn verify_server_key(
+    config: &RemoteDesktopConfig,
+    server_public_key: &[u8],
+    cert_prompt: &Option<super::CertPromptCb>,
+) -> Result<()> {
+    use super::cert_pins::{self, PinCheck};
+    use crate::ssh::{HostKeyDecision, HostKeyPromptKind, HostKeyPromptRequest};
+
+    let fingerprint = cert_pins::fingerprint(server_public_key);
+    let kind = match cert_pins::check(&config.host, config.port, &fingerprint) {
+        PinCheck::Match => return Ok(()),
+        PinCheck::Unknown => HostKeyPromptKind::Unknown,
+        PinCheck::Mismatch => HostKeyPromptKind::Changed,
+    };
+
+    // With a prompt wired, ask the user; otherwise default to accept-new on
+    // first contact and reject a changed key (possible MITM).
+    let decision = match cert_prompt {
+        Some(cb) => {
+            let req = HostKeyPromptRequest {
+                host: config.host.clone(),
+                port: config.port,
+                key_type: "RDP TLS certificate".to_string(),
+                fingerprint: fingerprint.clone(),
+                kind,
+            };
+            cb(req).await
+        }
+        None => match kind {
+            HostKeyPromptKind::Unknown => HostKeyDecision::Accept,
+            HostKeyPromptKind::Changed => HostKeyDecision::Reject,
+        },
+    };
+
+    match decision {
+        HostKeyDecision::Accept => {
+            cert_pins::save(&config.host, config.port, &fingerprint);
+            Ok(())
+        }
+        HostKeyDecision::Reject => Err(RemoteDesktopError::Auth(match kind {
+            HostKeyPromptKind::Unknown => format!(
+                "RDP server certificate for {}:{} was not trusted",
+                config.host, config.port
+            ),
+            HostKeyPromptKind::Changed => format!(
+                "RDP server certificate for {}:{} changed and was not trusted (possible MITM)",
+                config.host, config.port
+            ),
+        })),
+    }
 }
 
 /// Build the IronRDP connector config from our protocol-agnostic config.

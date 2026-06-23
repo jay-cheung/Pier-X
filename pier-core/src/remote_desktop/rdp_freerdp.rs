@@ -69,6 +69,13 @@ pub(crate) async fn run(
     sink: FrameSink,
     mut input_rx: UnboundedReceiver<InputEvent>,
     mut control_rx: UnboundedReceiver<ControlMsg>,
+    // TODO(cert-pinning): wire FreeRDP's `VerifyCertificateEx` FFI callback to
+    // `super::cert_pins` for TOFU here (the IronRDP path already does this).
+    // The sync C callback can't await the interactive prompt, so this would be
+    // accept-new + reject-on-change. Left unwired until it can be built/tested
+    // against libfreerdp3 (this experimental backend still sets
+    // `FreeRDP_IgnoreCertificate`).
+    _cert_prompt: Option<super::CertPromptCb>,
 ) -> Result<()> {
     // Bridge the tokio receivers onto std channels the blocking loop can poll.
     let (in_tx, in_rx) = std::sync::mpsc::channel::<InputEvent>();

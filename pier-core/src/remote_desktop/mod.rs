@@ -12,6 +12,9 @@
 //!   used by modern macOS Screen Sharing.
 //! * **RDP** — backed by IronRDP ([`rdp`], behind the `rdp` feature).
 
+// TOFU certificate pinning, shared by both RDP backends.
+#[cfg(any(feature = "rdp", feature = "rdp-freerdp"))]
+pub mod cert_pins;
 mod error;
 mod frame;
 mod input;
@@ -26,6 +29,12 @@ pub mod vnc;
 pub use error::{RemoteDesktopError, Result};
 pub use frame::{CopyRect, FrameEvent, FrameSink, FrameTile, TileEncoding};
 pub use input::{InputEvent, MouseButton};
+
+/// Async callback consulted before an RDP session sends credentials, when
+/// the server's certificate is unknown (first contact) or has changed.
+/// Reuses the SSH host-key prompt plumbing so the same "trust this host?"
+/// dialog renders. `None` falls back to silent accept-new + reject-on-change.
+pub type CertPromptCb = crate::ssh::HostKeyPromptCb;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -113,13 +122,23 @@ impl RemoteDesktopSession {
     /// Open a connection and start streaming. The protocol task runs on the
     /// shared runtime; `sink` receives every [`FrameEvent`] including the
     /// terminal [`FrameEvent::Disconnected`] when the task ends.
-    pub fn connect(config: RemoteDesktopConfig, sink: FrameSink) -> Result<Self> {
+    pub fn connect(
+        config: RemoteDesktopConfig,
+        sink: FrameSink,
+        cert_prompt: Option<CertPromptCb>,
+    ) -> Result<Self> {
         let (input_tx, input_rx) = unbounded_channel();
         let (control_tx, control_rx) = unbounded_channel();
         let width = config.width.max(1);
         let height = config.height.max(1);
 
-        let task = runtime::shared().spawn(run_session(config, sink, input_rx, control_rx));
+        let task = runtime::shared().spawn(run_session(
+            config,
+            sink,
+            input_rx,
+            control_rx,
+            cert_prompt,
+        ));
 
         Ok(Self {
             input_tx,
@@ -164,6 +183,7 @@ async fn run_session(
     sink: FrameSink,
     input_rx: UnboundedReceiver<InputEvent>,
     control_rx: UnboundedReceiver<ControlMsg>,
+    cert_prompt: Option<CertPromptCb>,
 ) {
     // Drive the backend on its own task so a *panic* surfaces via the
     // JoinHandle. If it panicked inline, the unwind would skip the terminal
@@ -171,16 +191,22 @@ async fn run_session(
     // panic would be swallowed, leaving the UI stuck on "connecting" forever.
     let backend_sink = sink.clone();
     let backend = runtime::shared().spawn(async move {
+        // `cert_prompt` is consumed only by the RDP backends; silence the
+        // unused warning in a VNC-only build.
+        #[cfg(not(any(feature = "rdp", feature = "rdp-freerdp")))]
+        let _ = &cert_prompt;
         match config.protocol {
             RemoteProtocol::Vnc => vnc::run(config, backend_sink, input_rx, control_rx).await,
             // FreeRDP supersedes IronRDP for the RDP protocol when its (experimental)
             // feature is compiled in — it adds the real H.264/AVC444 path IronRDP lacks.
             #[cfg(feature = "rdp-freerdp")]
             RemoteProtocol::Rdp => {
-                rdp_freerdp::run(config, backend_sink, input_rx, control_rx).await
+                rdp_freerdp::run(config, backend_sink, input_rx, control_rx, cert_prompt).await
             }
             #[cfg(all(feature = "rdp", not(feature = "rdp-freerdp")))]
-            RemoteProtocol::Rdp => rdp::run(config, backend_sink, input_rx, control_rx).await,
+            RemoteProtocol::Rdp => {
+                rdp::run(config, backend_sink, input_rx, control_rx, cert_prompt).await
+            }
             #[cfg(all(not(feature = "rdp"), not(feature = "rdp-freerdp")))]
             RemoteProtocol::Rdp => Err(RemoteDesktopError::Unsupported(
                 "RDP support was not compiled into this build".to_string(),
