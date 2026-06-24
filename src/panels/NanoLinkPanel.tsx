@@ -431,14 +431,20 @@ function ClientView({
   actionMsg: string;
 }) {
   const [text, setText] = useState("");
+  const [servers, setServers] = useState<cmd.NanoLinkAgentServer[]>([]);
   const [busy, setBusy] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
 
-  const loadText = async () => {
+  const reload = async () => {
     setBusy(true);
     try {
-      setText(await cmd.nanolinkAgentStatus(sshArgs));
+      const [txt, srv] = await Promise.all([
+        cmd.nanolinkAgentStatus(sshArgs),
+        cmd.nanolinkAgentServers(sshArgs).catch(() => [] as cmd.NanoLinkAgentServer[]),
+      ]);
+      setText(txt);
+      setServers(srv);
     } catch (e) {
       setText(fmtErr(e));
     } finally {
@@ -447,7 +453,7 @@ function ClientView({
   };
 
   useEffect(() => {
-    void loadText();
+    void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sshArgs.host, sshArgs.user, sshArgs.port]);
 
@@ -456,9 +462,21 @@ function ClientView({
       (args) => cmd.nanolinkAgentService({ ...args, action }),
       () => {
         onChanged();
-        void loadText();
+        void reload();
       },
     );
+
+  const removeServer = (host: string, port: number) =>
+    void runControl(
+      (args) => cmd.nanolinkAgentRemoveServer({ ...args, targetHost: host, targetPort: port }),
+      () => {
+        onChanged();
+        void reload();
+      },
+    );
+
+  const tlsLabel = (s: cmd.NanoLinkAgentServer) =>
+    !s.tlsEnabled ? t("no TLS") : s.tlsVerify ? "TLS ✓" : t("TLS (no verify)");
 
   return (
     <div className="nl-client">
@@ -500,17 +518,19 @@ function ClientView({
         >
           <Plus size={13} /> {t("Add server")}
         </button>
-        <button
-          type="button"
-          className="btn is-ghost is-compact"
-          onClick={() => {
-            setRemoveOpen((v) => !v);
-            setAddOpen(false);
-          }}
-        >
-          <Trash2 size={13} /> {t("Remove server")}
-        </button>
-        <IconButton variant="mini" title={t("Refresh")} onClick={() => void loadText()}>
+        {servers.length === 0 && (
+          <button
+            type="button"
+            className="btn is-ghost is-compact"
+            onClick={() => {
+              setRemoveOpen((v) => !v);
+              setAddOpen(false);
+            }}
+          >
+            <Trash2 size={13} /> {t("Remove server")}
+          </button>
+        )}
+        <IconButton variant="mini" title={t("Refresh")} onClick={() => void reload()}>
           <RefreshCw size={13} />
         </IconButton>
       </div>
@@ -533,40 +553,66 @@ function ClientView({
               () => {
                 setAddOpen(false);
                 onChanged();
-                void loadText();
+                void reload();
               },
             )
           }
         />
       )}
 
-      {removeOpen && (
-        <RemoveServerForm
-          t={t}
-          onCancel={() => setRemoveOpen(false)}
-          onSubmit={(form) =>
-            void runControl(
-              (args) =>
-                cmd.nanolinkAgentRemoveServer({
-                  ...args,
-                  targetHost: form.host,
-                  targetPort: form.port,
-                }),
-              () => {
-                setRemoveOpen(false);
-                onChanged();
-                void loadText();
-              },
-            )
-          }
-        />
+      {servers.length > 0 ? (
+        <div className="nl-srv-list">
+          {servers.map((s) => (
+            <div className="nl-srv-row" key={`${s.host}:${s.port}`}>
+              <span className="nl-mono">
+                {s.host}:{s.port}
+              </span>
+              <Badge tone="muted">{s.permissionName || `P${s.permission}`}</Badge>
+              <span className="nl-srv-tls">{tlsLabel(s)}</span>
+              <span className="nl-spacer" />
+              <IconButton
+                variant="mini"
+                destructive
+                title={t("Remove")}
+                onClick={() => removeServer(s.host, s.port)}
+              >
+                <Trash2 size={13} />
+              </IconButton>
+            </div>
+          ))}
+        </div>
+      ) : (
+        removeOpen && (
+          <RemoveServerForm
+            t={t}
+            onCancel={() => setRemoveOpen(false)}
+            onSubmit={(form) =>
+              void runControl(
+                (args) =>
+                  cmd.nanolinkAgentRemoveServer({
+                    ...args,
+                    targetHost: form.host,
+                    targetPort: form.port,
+                  }),
+                () => {
+                  setRemoveOpen(false);
+                  onChanged();
+                  void reload();
+                },
+              )
+            }
+          />
+        )
       )}
 
       {actionMsg && <div className="nl-msg nl-msg--block">{actionMsg}</div>}
 
-      <pre className="nl-output nl-output--tall">
-        {busy ? t("Loading…") : text || t("No status output.")}
-      </pre>
+      <details className="nl-details">
+        <summary>{t("Agent status output")}</summary>
+        <pre className="nl-output nl-output--tall">
+          {busy ? t("Loading…") : text || t("No status output.")}
+        </pre>
+      </details>
     </div>
   );
 }
@@ -841,6 +887,7 @@ function ServerView({
                   <th>{t("OS")}</th>
                   <th>{t("Version")}</th>
                   <th>{t("Perm")}</th>
+                  <th>{t("Last seen")}</th>
                   <th />
                   <th />
                 </tr>
@@ -853,6 +900,7 @@ function ServerView({
                       <td>{[a.os, a.arch].filter(Boolean).join(" / ")}</td>
                       <td className="nl-mono">{a.version || "—"}</td>
                       <td>{a.permissionLevel}</td>
+                      <td className="nl-mono">{shortStamp(a.lastHeartbeat)}</td>
                       <td>
                         <StatusDot tone={a.online ? "pos" : "off"} />
                       </td>
@@ -870,7 +918,7 @@ function ServerView({
                     </tr>
                     {cmdAgentId === a.id && a.id && (
                       <tr className="nl-cmd-row">
-                        <td colSpan={6}>
+                        <td colSpan={7}>
                           <CommandSender sshArgs={sshArgs} port={port} jwt={jwt} agentId={a.id} t={t} fmtErr={fmtErr} />
                         </td>
                       </tr>
@@ -1139,4 +1187,12 @@ function prettyJson(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+/** Trim an RFC3339 timestamp to `YYYY-MM-DD HH:MM:SS` (server-local), or
+ *  pass it through when it doesn't match. */
+function shortStamp(s: string): string {
+  if (!s) return "—";
+  const m = s.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/);
+  return m ? `${m[1]} ${m[2]}` : s;
 }

@@ -2502,9 +2502,23 @@ export type NanoLinkServerAgent = {
 export const nanolinkStatus = (params: SshParams) =>
   invoke<NanoLinkStatus>("nanolink_status", params);
 
-/** Raw `nanolink-agent status` + `server list` text for the panel. */
+/** Raw `nanolink-agent status` text for the panel. */
 export const nanolinkAgentStatus = (params: SshParams) =>
   invoke<string>("nanolink_agent_status", params);
+
+/** One configured server upstream parsed from `nanolink-agent server list`. */
+export type NanoLinkAgentServer = {
+  host: string;
+  port: number;
+  permission: number;
+  permissionName: string;
+  tlsEnabled: boolean;
+  tlsVerify: boolean;
+};
+
+/** Structured list of the agent's configured server upstreams. */
+export const nanolinkAgentServers = (params: SshParams) =>
+  invoke<NanoLinkAgentServer[]>("nanolink_agent_servers", params);
 
 /** start | stop | restart the agent service (needs sudo). */
 export const nanolinkAgentService = (

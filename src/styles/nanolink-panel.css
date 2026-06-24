@@ -290,3 +290,24 @@
   flex: 1;
   min-width: 8rem;
 }
+
+/* ── 3a: structured configured-server rows ── */
+.nl-srv-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.nl-srv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--ui-fs-sm);
+}
+.nl-srv-tls {
+  color: var(--muted);
+  font-size: var(--size-micro);
+}

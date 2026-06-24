@@ -9598,13 +9598,39 @@ async fn nanolink_agent_status(
             &key_path,
             saved_connection_index,
         )?;
-        let text = nanolink::agent_status_text_blocking(&session).map_err(|e| e.to_string())?;
-        let servers =
-            nanolink::agent_servers_text_blocking(&session).map_err(|e| e.to_string())?;
-        Ok(format!("{text}\n\n── server list ──\n{servers}"))
+        nanolink::agent_status_text_blocking(&session).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("nanolink_agent_status join: {e}"))?
+}
+
+#[tauri::command]
+async fn nanolink_agent_servers(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    auth_mode: String,
+    password: String,
+    key_path: String,
+    saved_connection_index: Option<usize>,
+) -> Result<Vec<nanolink::AgentServer>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: tauri::State<'_, AppState> = app.state();
+        let session = get_or_open_ssh_session(
+            &state,
+            &host,
+            port,
+            &user,
+            &auth_mode,
+            &password,
+            &key_path,
+            saved_connection_index,
+        )?;
+        nanolink::agent_servers_blocking(&session).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("nanolink_agent_servers join: {e}"))?
 }
 
 #[tauri::command]
@@ -19993,6 +20019,7 @@ pub fn run() {
             detect_services,
             nanolink_status,
             nanolink_agent_status,
+            nanolink_agent_servers,
             nanolink_agent_service,
             nanolink_agent_add_server,
             nanolink_agent_remove_server,

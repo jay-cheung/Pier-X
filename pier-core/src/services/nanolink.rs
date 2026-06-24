@@ -256,16 +256,89 @@ pub fn agent_status_text_blocking(session: &SshSession) -> Result<String> {
     crate::ssh::runtime::shared().block_on(agent_status_text(session))
 }
 
-/// Raw output of `nanolink-agent server list` (configured upstreams).
-/// Returned verbatim because the column layout is not pinned upstream.
-pub async fn agent_servers_text(session: &SshSession) -> Result<String> {
-    let (_, out) = run(session, "nanolink-agent server list 2>&1").await;
-    Ok(out)
+/// One server upstream the agent is configured to dial, parsed from
+/// `nanolink-agent server list`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentServer {
+    /// Server host (no port).
+    pub host: String,
+    /// Server gRPC port.
+    pub port: u16,
+    /// Permission level granted on this link (0–3).
+    pub permission: u8,
+    /// Human name for `permission` (e.g. `SERVICE_CONTROL`).
+    pub permission_name: String,
+    /// Whether TLS is enabled on the link.
+    pub tls_enabled: bool,
+    /// Whether the server certificate is verified.
+    pub tls_verify: bool,
 }
 
-/// Blocking twin of [`agent_servers_text`].
-pub fn agent_servers_text_blocking(session: &SshSession) -> Result<String> {
-    crate::ssh::runtime::shared().block_on(agent_servers_text(session))
+/// List the agent's configured server upstreams as structured rows
+/// (`nanolink-agent server list`). An empty result means the output had
+/// no parseable rows (e.g. `(none)`), so the panel can fall back to text.
+pub async fn agent_servers(session: &SshSession) -> Result<Vec<AgentServer>> {
+    let (_, out) = run(session, "nanolink-agent server list 2>&1").await;
+    Ok(parse_agent_servers(&out))
+}
+
+/// Blocking twin of [`agent_servers`].
+pub fn agent_servers_blocking(session: &SshSession) -> Result<Vec<AgentServer>> {
+    crate::ssh::runtime::shared().block_on(agent_servers(session))
+}
+
+/// Parse `nanolink-agent server list` output. Upstream format, per server:
+///   `  {i}. {host}:{port}`
+///   `     Permission: {N} ({NAME})`
+///   `     TLS: {bool}, Verify: {bool}`
+/// Lines that don't match are ignored.
+fn parse_agent_servers(text: &str) -> Vec<AgentServer> {
+    let mut servers: Vec<AgentServer> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        // "{i}. {host}:{port}"
+        if let Some((idx, rest)) = line.split_once(". ") {
+            if !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()) {
+                if let Some((host, port)) = rest.rsplit_once(':') {
+                    if let Ok(p) = port.trim().parse::<u16>() {
+                        servers.push(AgentServer {
+                            host: host.trim().to_string(),
+                            port: p,
+                            ..Default::default()
+                        });
+                        continue;
+                    }
+                }
+            }
+        }
+        if let Some(rest) = line.strip_prefix("Permission:") {
+            if let Some(srv) = servers.last_mut() {
+                let rest = rest.trim();
+                let (num, name) = match rest.split_once(' ') {
+                    Some((n, r)) => (n, r.trim().trim_start_matches('(').trim_end_matches(')')),
+                    None => (rest, ""),
+                };
+                srv.permission = num.trim().parse().unwrap_or(0);
+                srv.permission_name = name.to_string();
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("TLS:") {
+            if let Some(srv) = servers.last_mut() {
+                let mut parts = rest.splitn(2, ',');
+                srv.tls_enabled = parts
+                    .next()
+                    .map(|s| s.trim().eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                if let Some(v) = parts.next() {
+                    let vv = v.trim().trim_start_matches("Verify:").trim();
+                    srv.tls_verify = vv.eq_ignore_ascii_case("true");
+                }
+            }
+        }
+    }
+    servers
 }
 
 /// `start` | `stop` | `restart` the agent service (needs sudo).
@@ -1045,6 +1118,25 @@ mod tests {
             "HTTP 403: insufficient permissions"
         );
         assert_eq!(curl_error(500, "boom"), "HTTP 500: boom");
+    }
+
+    #[test]
+    fn parse_agent_servers_format() {
+        let out = "Configured servers:\n  1. 192.168.1.10:39100\n     Permission: 2 (SERVICE_CONTROL)\n     TLS: true, Verify: false\n  2. host.example.com:9200\n     Permission: 0 (READ_ONLY)\n     TLS: false, Verify: false\n";
+        let s = parse_agent_servers(out);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s[0].host, "192.168.1.10");
+        assert_eq!(s[0].port, 39100);
+        assert_eq!(s[0].permission, 2);
+        assert_eq!(s[0].permission_name, "SERVICE_CONTROL");
+        assert!(s[0].tls_enabled);
+        assert!(!s[0].tls_verify);
+        assert_eq!(s[1].host, "host.example.com");
+        assert_eq!(s[1].port, 9200);
+        assert_eq!(s[1].permission, 0);
+        assert!(!s[1].tls_enabled);
+        // No parseable rows → empty (panel falls back to text).
+        assert!(parse_agent_servers("Configured servers:\n  (none)").is_empty());
     }
 
     #[test]
