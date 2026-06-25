@@ -2214,6 +2214,8 @@ function AiSettingsPanel() {
   const [fetching, setFetching] = useState(false);
   const [testState, setTestState] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+  const [cliDetecting, setCliDetecting] = useState(false);
+  const [cliDetectMsg, setCliDetectMsg] = useState<string | null>(null);
   const [whitelist, setWhitelist] = useState<aiCmd.AiWhitelistEntry[]>([]);
 
   // Per-vendor key slot: switching vendors re-reads ITS keyring
@@ -2299,6 +2301,24 @@ function AiSettingsPanel() {
       .finally(() => setTesting(false));
   };
 
+  // Probe PATH + common install dirs for the selected CLI and fill the path.
+  const detectCli = () => {
+    setCliDetecting(true);
+    setCliDetectMsg(null);
+    aiCmd
+      .aiCliDetect(vendor.cliFlavor ?? "claude-code")
+      .then((d) => {
+        if (d.found) {
+          settings.setAiCliBin(d.path);
+          setCliDetectMsg(`✓ ${d.version}`);
+        } else {
+          setCliDetectMsg(t("Not found — install it, or type the full path."));
+        }
+      })
+      .catch((e) => setCliDetectMsg(String(e)))
+      .finally(() => setCliDetecting(false));
+  };
+
   return (
     <>
       <SectionTitle>{t("Model provider")}</SectionTitle>
@@ -2319,15 +2339,28 @@ function AiSettingsPanel() {
       {isCli && (
         <SettingRow
           label={t("CLI binary")}
-          description={t("Drives your installed, logged-in CLI as the backend — no API key, it reuses your own subscription login. Leave blank to find it on PATH. Runs tool-less (M1): it answers and suggests commands; Pier-X keeps its own gated tools.")}
+          description={
+            cliDetectMsg ??
+            t("Drives your installed, logged-in CLI as the backend — no API key, it reuses your own subscription login. Leave blank to find it on PATH, or Detect it. Runs tool-less (M1) by default; Pier-X keeps its own gated tools.")
+          }
         >
-          <input
-            className="settings__input"
-            value={settings.aiCliBin}
-            onChange={(e) => settings.setAiCliBin(e.currentTarget.value)}
-            placeholder={vendor.cliFlavor === "codex" ? "codex (or full path)" : "claude (or full path)"}
-            style={{ fontFamily: "var(--mono)" }}
-          />
+          <div style={{ display: "flex", gap: "var(--sp-2)" }}>
+            <input
+              className="settings__input"
+              value={settings.aiCliBin}
+              onChange={(e) => settings.setAiCliBin(e.currentTarget.value)}
+              placeholder={vendor.cliFlavor === "codex" ? "codex (or full path)" : "claude (or full path)"}
+              style={{ fontFamily: "var(--mono)" }}
+            />
+            <button
+              type="button"
+              className="btn is-compact"
+              onClick={detectCli}
+              disabled={cliDetecting}
+            >
+              {cliDetecting ? t("Detecting…") : t("Detect")}
+            </button>
+          </div>
         </SettingRow>
       )}
       {isCli && (

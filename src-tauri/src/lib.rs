@@ -20129,6 +20129,7 @@ pub fn run() {
             ai_secret_status,
             ai_test_connection,
             ai_list_models,
+            ai_cli_detect,
             ai_whitelist_list,
             ai_whitelist_remove,
             ai_replay,

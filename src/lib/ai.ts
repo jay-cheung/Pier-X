@@ -151,6 +151,12 @@ export const aiTestConnection = (provider: AiProviderSettings) =>
 export const aiListModels = (provider: AiProviderSettings) =>
   invoke<string[]>("ai_list_models", { provider });
 
+export type AiCliDetect = { found: boolean; path: string; version: string };
+
+/** Probe for an installed agent CLI (settings "Detect", §5.14.8). */
+export const aiCliDetect = (flavor: string) =>
+  invoke<AiCliDetect>("ai_cli_detect", { flavor });
+
 export const aiWhitelistList = () => invoke<AiWhitelistEntry[]>("ai_whitelist_list");
 
 export const aiWhitelistRemove = (host: string, prefix: string) =>

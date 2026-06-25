@@ -56,6 +56,28 @@ fn resolve_bin(cfg: &ProviderConfig) -> String {
         .unwrap_or_else(|| default_bin(flavor_of(cfg)).to_string())
 }
 
+/// Build a `Command` for the CLI binary, wrapping a Windows PowerShell
+/// (`.ps1`) or batch (`.cmd` / `.bat`) script in its interpreter so it
+/// can be spawned directly — e.g. scoop installs Codex as `codex.ps1`.
+/// Callers append the CLI's own args afterwards.
+fn cli_command(bin: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let lower = bin.to_ascii_lowercase();
+        if lower.ends_with(".ps1") {
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", bin]);
+            return c;
+        }
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut c = Command::new("cmd");
+            c.args(["/C", bin]);
+            return c;
+        }
+    }
+    Command::new(bin)
+}
+
 /// Truncate to `max` chars (char-safe — JSON args may be multibyte).
 fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -352,7 +374,7 @@ pub fn stream_cli(
     let bin = resolve_bin(cfg);
     let prompt = compose_prompt(system, messages);
 
-    let mut cmd = Command::new(&bin);
+    let mut cmd = cli_command(&bin);
     cmd.args(build_args(flavor, cfg, native));
     if native {
         if let Some(dir) = cfg
@@ -493,7 +515,7 @@ pub fn known_models(cfg: &ProviderConfig) -> Vec<String> {
 pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
     let flavor = flavor_of(cfg);
     let bin = resolve_bin(cfg);
-    let mut cmd = Command::new(&bin);
+    let mut cmd = cli_command(&bin);
     cmd.arg("--version");
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -509,6 +531,170 @@ pub fn test_connection(cfg: &ProviderConfig) -> Result<String, AiError> {
     let ver_raw = String::from_utf8_lossy(&out.stdout);
     let ver = ver_raw.lines().next().unwrap_or("").trim();
     Ok(format!("ok · {} · {ver}", default_bin(flavor)))
+}
+
+// ── Detection (settings "Detect" button, §5.14.8) ──────────────────
+
+/// Result of probing for an installed agent CLI.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliDetect {
+    /// Whether a working binary was found.
+    pub found: bool,
+    /// The binary string that responded to `--version` (bare name if it
+    /// resolved on PATH, else an absolute path).
+    pub path: String,
+    /// First line of `--version` output.
+    pub version: String,
+}
+
+fn home_dir() -> Option<String> {
+    std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .filter(|s| !s.is_empty())
+}
+
+/// Resolve a bare name to full paths via the OS resolver, so `.cmd` /
+/// `.ps1` / `.exe` shims a bare `Command::new` would miss on Windows
+/// (e.g. scoop's `codex.cmd` / `codex.ps1`) are still found.
+fn resolve_on_path(name: &str) -> Vec<String> {
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("where");
+        c.arg(name);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(format!("command -v {name}"));
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::process_util::configure_background_command(&mut cmd);
+    let Ok(out) = cmd.output() else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let mut paths: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    // Prefer fast, non-stalling shims: .exe, then .cmd/.bat, then .ps1
+    // (nested PowerShell is slow / can hang), then extension-less last
+    // (unrunnable as a bare Windows process).
+    paths.sort_by_key(|p| {
+        let l = p.to_ascii_lowercase();
+        if l.ends_with(".exe") {
+            0
+        } else if l.ends_with(".cmd") || l.ends_with(".bat") {
+            1
+        } else if l.ends_with(".ps1") {
+            2
+        } else {
+            3
+        }
+    });
+    paths
+}
+
+fn detect_candidates(flavor: CliFlavor) -> Vec<String> {
+    let name = default_bin(flavor);
+    let mut v = vec![name.to_string()];
+    v.extend(resolve_on_path(name));
+    let Some(home) = home_dir() else {
+        return v;
+    };
+    let sep = std::path::MAIN_SEPARATOR;
+    let join = |parts: &[&str]| -> String {
+        let mut p = home.clone();
+        for part in parts {
+            p.push(sep);
+            p.push_str(part);
+        }
+        p
+    };
+    if cfg!(target_os = "windows") {
+        match flavor {
+            CliFlavor::ClaudeCode => {
+                v.push(join(&[".local", "bin", "claude.exe"]));
+                v.push(join(&["AppData", "Roaming", "npm", "claude.cmd"]));
+                v.push(join(&["scoop", "shims", "claude.exe"]));
+            }
+            CliFlavor::Codex => {
+                v.push(join(&["scoop", "shims", "codex.exe"]));
+                v.push(join(&["scoop", "shims", "codex.cmd"]));
+                v.push(join(&["scoop", "shims", "codex.ps1"]));
+                v.push(join(&["AppData", "Roaming", "npm", "codex.cmd"]));
+            }
+        }
+    } else {
+        v.push(join(&[".local", "bin", name]));
+        v.push(format!("/usr/local/bin/{name}"));
+        v.push(format!("/opt/homebrew/bin/{name}"));
+        v.push(join(&[".npm-global", "bin", name]));
+        if matches!(flavor, CliFlavor::ClaudeCode) {
+            v.push(join(&[".claude", "local", "claude"]));
+        }
+    }
+    v
+}
+
+fn probe_version(bin: &str) -> Option<String> {
+    let mut cmd = cli_command(bin);
+    cmd.arg("--version");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::process_util::configure_background_command(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
+    // Bound the probe — some Windows shims (.ps1 via PowerShell) can
+    // stall; never let detection hang on one candidate.
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                break;
+            }
+            Ok(None) => {
+                if start.elapsed() > Duration::from_secs(6) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
+    // `--version` output is tiny, so reading after exit can't deadlock.
+    let mut s = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut s);
+    }
+    let line = s.lines().next().unwrap_or("").trim().to_string();
+    if line.is_empty() {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+/// Probe PATH + common install locations for the flavor's binary. Stops
+/// at the first candidate that answers `--version`.
+pub fn detect(flavor: CliFlavor) -> CliDetect {
+    for cand in detect_candidates(flavor) {
+        if let Some(version) = probe_version(&cand) {
+            return CliDetect { found: true, path: cand, version };
+        }
+    }
+    CliDetect { found: false, path: String::new(), version: String::new() }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
