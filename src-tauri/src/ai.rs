@@ -53,6 +53,13 @@ const READ_FILE_CAP: u64 = 5 * 1024 * 1024;
 const WRITE_FILE_CAP: usize = 5 * 1024 * 1024;
 /// Per-attachment cap before scrubbing.
 const ATTACHMENT_CAP: usize = 64_000;
+/// Transcript entries shown in replay / considered for context restore.
+const TRANSCRIPT_REPLAY_KEEP: usize = 600;
+/// Restored history is deliberately smaller than the live trim ceiling:
+/// a new user turn and tool messages are appended immediately after hydrate.
+const RESTORED_CONTEXT_MAX_MESSAGES: usize = 48;
+const RESTORED_CONTEXT_TOTAL_CAP: usize = 56_000;
+const RESTORED_CONTEXT_ENTRY_CAP: usize = 8_000;
 
 // ── Managed state ──────────────────────────────────────────────────
 
@@ -476,6 +483,158 @@ fn transcript_append(conversation_id: &str, mut entry: Value) {
     }
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{entry}");
+    }
+}
+
+fn read_transcript_entries(conversation_id: &str, keep: usize) -> Vec<Value> {
+    let Some(path) = transcript_path(conversation_id) else {
+        return Vec::new();
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<Value> = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if entries.len() > keep {
+        entries.drain(..entries.len() - keep);
+    }
+    entries
+}
+
+fn cap_text(text: &str, cap: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        tail(trimmed, cap)
+    }
+}
+
+fn event_text(entry: &Value, key: &str) -> String {
+    entry
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|s| cap_text(s, RESTORED_CONTEXT_ENTRY_CAP))
+        .unwrap_or_default()
+}
+
+fn transcript_tool_result_context(
+    entry: &Value,
+    tool_summaries: &HashMap<String, String>,
+) -> Option<ChatMessage> {
+    let call_id = entry.get("callId").and_then(Value::as_str).unwrap_or("");
+    let summary = tool_summaries
+        .get(call_id)
+        .map(String::as_str)
+        .unwrap_or("tool call");
+    if entry.get("decision").and_then(Value::as_str) == Some("deny") {
+        let reason = event_text(entry, "denyReason");
+        let body = if reason.is_empty() {
+            format!("[Pier-X tool result]\n{summary}\nDenied by the user.")
+        } else {
+            format!("[Pier-X tool result]\n{summary}\nDenied by the user: {reason}")
+        };
+        return Some(ChatMessage::assistant(body, Vec::new()));
+    }
+
+    let output = event_text(entry, "output");
+    if output.is_empty() {
+        return None;
+    }
+    let exit = entry.get("exitCode").and_then(Value::as_i64).unwrap_or(0);
+    Some(ChatMessage::assistant(
+        format!("[Pier-X tool result]\n{summary}\nexit_code: {exit}\n{output}"),
+        Vec::new(),
+    ))
+}
+
+fn transcript_entries_to_context(entries: &[Value]) -> (usize, Vec<ChatMessage>) {
+    let mut tool_summaries: HashMap<String, String> = HashMap::new();
+    let mut raw: Vec<ChatMessage> = Vec::new();
+
+    for entry in entries {
+        match entry.get("kind").and_then(Value::as_str).unwrap_or("") {
+            "user" => {
+                let text = event_text(entry, "text");
+                if !text.is_empty() {
+                    raw.push(ChatMessage::user(text));
+                }
+            }
+            "assistant" => {
+                let text = event_text(entry, "text");
+                if !text.is_empty() {
+                    raw.push(ChatMessage::assistant(text, Vec::new()));
+                }
+            }
+            "toolCall" => {
+                if let Some(call_id) = entry.get("callId").and_then(Value::as_str) {
+                    let summary = event_text(entry, "summary");
+                    if !summary.is_empty() {
+                        tool_summaries.insert(call_id.to_string(), summary.clone());
+                    }
+                    if entry.get("status").and_then(Value::as_str) == Some("blocked") {
+                        let body = if summary.is_empty() {
+                            "[Pier-X tool result]\nBlocked by Pier-X policy.".to_string()
+                        } else {
+                            format!("[Pier-X tool result]\n{summary}\nBlocked by Pier-X policy.")
+                        };
+                        raw.push(ChatMessage::assistant(body, Vec::new()));
+                    }
+                }
+            }
+            "toolResult" => {
+                if let Some(msg) = transcript_tool_result_context(entry, &tool_summaries) {
+                    raw.push(msg);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut kept_rev: Vec<ChatMessage> = Vec::new();
+    let mut total = 0usize;
+    for msg in raw.iter().rev() {
+        if kept_rev.len() >= RESTORED_CONTEXT_MAX_MESSAGES {
+            break;
+        }
+        let next_total = total.saturating_add(msg.content.len());
+        if !kept_rev.is_empty() && next_total > RESTORED_CONTEXT_TOTAL_CAP {
+            break;
+        }
+        total = next_total;
+        kept_rev.push(msg.clone());
+    }
+    kept_rev.reverse();
+
+    let omitted = raw.len().saturating_sub(kept_rev.len());
+    if omitted > 0 {
+        kept_rev.insert(
+            0,
+            ChatMessage::user(format!(
+                "[Pier-X context restore]\n{omitted} older transcript entries were compacted locally. Continue from the recent restored conversation below; if exact old command output matters, inspect the current host again."
+            )),
+        );
+    }
+    (omitted, kept_rev)
+}
+
+fn hydrate_context_from_transcript(conversation_id: &str, conv: &Arc<ConvState>) {
+    if !conv.messages.lock().unwrap().is_empty() {
+        return;
+    }
+    let entries = read_transcript_entries(conversation_id, TRANSCRIPT_REPLAY_KEEP);
+    if entries.is_empty() {
+        return;
+    }
+    let (_, restored) = transcript_entries_to_context(&entries);
+    if restored.is_empty() {
+        return;
+    }
+    let mut messages = conv.messages.lock().unwrap();
+    if messages.is_empty() {
+        *messages = restored;
     }
 }
 
@@ -929,21 +1088,7 @@ pub fn ai_whitelist_remove(host: String, prefix: String) {
 
 #[tauri::command]
 pub fn ai_replay(conversation_id: String) -> Vec<Value> {
-    let Some(path) = transcript_path(&conversation_id) else {
-        return Vec::new();
-    };
-    let Ok(raw) = fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<Value> = raw
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
-    let keep = 600;
-    if entries.len() > keep {
-        entries.drain(..entries.len() - keep);
-    }
-    entries
+    read_transcript_entries(&conversation_id, TRANSCRIPT_REPLAY_KEEP)
 }
 
 #[tauri::command]
@@ -1092,6 +1237,9 @@ pub fn ai_chat_send(
                 "\n\n[attached: {}]\n```\n{}\n```",
                 att.label, body
             ));
+        }
+        if req.persist_history {
+            hydrate_context_from_transcript(&conversation_id, &conv_for_thread);
         }
         conv_for_thread
             .messages
@@ -2112,6 +2260,49 @@ mod tests {
                 tokens_prefix_match(&legacy.tokens, "systemctl restart nginx")
             };
         assert!(hit);
+    }
+
+    #[test]
+    fn transcript_context_restores_text_and_tool_results() {
+        let entries = vec![
+            json!({ "kind": "user", "text": "这台机器有哪些服务？" }),
+            json!({ "kind": "assistant", "text": "我会先查看监听端口。" }),
+            json!({
+                "kind": "toolCall",
+                "callId": "call-1",
+                "summary": "run_command: ss -tulpn",
+                "status": "running"
+            }),
+            json!({
+                "kind": "toolResult",
+                "callId": "call-1",
+                "exitCode": 0,
+                "output": "tcp LISTEN 0 128 0.0.0.0:22 users:(sshd)"
+            }),
+        ];
+
+        let (omitted, restored) = transcript_entries_to_context(&entries);
+
+        assert_eq!(omitted, 0);
+        assert_eq!(restored.len(), 3);
+        assert_eq!(restored[0].content, "这台机器有哪些服务？");
+        assert_eq!(restored[1].content, "我会先查看监听端口。");
+        assert!(restored[2].content.contains("run_command: ss -tulpn"));
+        assert!(restored[2].content.contains("0.0.0.0:22"));
+    }
+
+    #[test]
+    fn transcript_context_compacts_old_entries() {
+        let entries: Vec<Value> = (0..(RESTORED_CONTEXT_MAX_MESSAGES + 8))
+            .map(|i| json!({ "kind": "user", "text": format!("turn {i}") }))
+            .collect();
+
+        let (omitted, restored) = transcript_entries_to_context(&entries);
+
+        assert_eq!(omitted, 8);
+        assert_eq!(restored.len(), RESTORED_CONTEXT_MAX_MESSAGES + 1);
+        assert!(restored[0].content.contains("Pier-X context restore"));
+        assert_eq!(restored[1].content, "turn 8");
     }
 
     #[test]
