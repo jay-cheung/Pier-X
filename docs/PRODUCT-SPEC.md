@@ -799,18 +799,21 @@ AI 通过 tool-use 协议调用 Pier-X 已有能力——**不新开能力面，
 
 **分级器规则（fail-closed）**：
 
-- 识别不了的命令一律按 **L2** 处理，绝不默认放行；
-- 复合命令（`&&` / `;` / `|` / `$()` / 反引号）拆段取**最高**风险级；含 `eval` 或不可静态展开的变量时整体升 L2；
+- 识别不了的命令一律按 **L2** 处理（绝不默认放行，也绝不抬到 L3——L2 是「询问且**不可加白名单**」，与红线区分；Pier-X 无沙箱可隔离远端未知命令，故未知保持 fail-closed 的 L2 而非降 L1）；命名的纯只读命令（见下「只读诊断命令表」）在兜底前先判 **L0 自动执行**；
+- 复合命令（`&&` / `;` / `|`）拆段取**最高**风险级；`$()` / 反引号 **命令替换递归判级**——替换体逐段判级并入总级（`echo $(date)`、`cat $(which python3)` 仍 L0，`echo $(rm -rf /)` 取 L3），仅当替换体无法静态展开（括号/反引号不配对）或含 `eval` 时升 L2；`watch` / `timeout` / `nice` / `nohup` / `stdbuf` / `setsid` 等包装器**继承被包装命令的级别**（`watch rm -rf /var` 判 L3，非 L0）；
 - `sudo` 前缀不改变分级，但审批卡片须标注「将以 root 执行」；
 - SQL 按语句类型分级，多语句脚本逐条分级取最高；
 - **只读诊断命令表**：除上述只读白名单外，分级器额外识别一批默认只读的诊断命令——服务配置测试器（`nginx -t/-T`、`apachectl configtest`、`httpd -t`、`sshd -t/-T`、`haproxy -c`、`varnishd -C`、`named-checkconf/checkzone`、`unbound-checkconf`、`postconf`、`caddy validate/adapt`、`dovecot -n`）、系统/硬件检查（`dmidecode`/`lshw`/`lsblk`/`lsns`/`ipcs`/`smartctl -a`/`hdparm -I`/`dmesg`/`objdump`/`readelf` 等）、只读网络诊断（`ethtool`/`ss`/`arp -a`/`conntrack -L`/`tcpdump` 抓包 等）、只读容器/K8s 子命令（`kubectl get/describe/logs`、`helm list`、`crictl ps`、`nerdctl ps` 等）、只读云 CLI 调用（`aws ... describe-*/list-*`、`gcloud ... list/describe`、`az ... show/list` 等）、以及包查询（`dpkg -l`、`rpm -qa`、`snap list` 等）。这些命令的**默认/只读形态判 L0 自动执行，其写/毁灭形态按本表正常升级**（如 `nginx -s stop` / `kubectl delete` / `dpkg -P`）；该表是 fail-closed 契约的**收紧而非放宽**：表外命令仍按上一条兜底到 L2。判定要点：
   - daemon 二进制按 **getopt 感知的闭合白名单**判级——只有真正独立出现的 test/version 标志才降 L0，被取值选项吞掉测试标志的形态（`sshd -f -t`、`httpd -f -t`、`varnishd -n -C`、`named -D -v`）以及裸调用（启动守护进程）一律 ≥ L2；
   - 凭据/密钥外泄型「读」操作不降级：`kubectl get secret -o yaml`、`gcloud auth print-access-token`、`aws secretsmanager get-secret-value`、`named-checkconf -p`（明文 key）、`caddy storage export`、`exim -be`（表达式可执行命令/读文件）等保持 ≥ L1/L2；
+  - 另有一批**无写/无执行形态的纯只读命令**直接判 L0：进程/模块查询（`pgrep`/`pidof`/`pstree`/`lsmod`）、文件/包名查找（`locate`/`plocate`/`fd`）、网络查询（`whois`）、计算/格式化（`cal`/`bc`/`expr`/`seq`/`factor`）、只读监控（`glances`/`btop`/`atop`/`nmon`/`dstat`）、内容读取过滤器（`tac`/`nl`/`rev`/`comm`/`zgrep`/`bzcat` 等，与 `cat`/`grep` 同走密钥库护栏）、包查询（`apt-cache`）、IaC 只读子命令（`terraform plan/validate/show/output`、`state list`）、`cargo check/clippy/metadata`；
+  - `grep`/`rg`/`ag` 的**搜索 PATTERN 不当作文件操作数**做密钥库判定（`grep shadow /etc/login.defs` 判 L0），只检查文件操作数（含 `-f/--file` 读取的模式文件；模式经 `-e/--regexp` 提供时位置参数即文件）；把读命令变成执行/写的形态按目标升级——`rg --pre`/`--search-zip` 与 `sed` 的 `e`/`s///e`（执行 shell）判 L2、`fd -x`/`find -exec` 继承被包装命令、写文件类（`base64 -o`、`sed w`/`s///w`、`sort -o`、`yq -i`）判 L1（目标为块设备/关键文件/审计日志时 L3）、`cargo check/clippy/test`（编译即跑 build.rs/过程宏）判 L1；这些守卫按 getopt 解析，识别粘连/聚簇/重复标志（`grep -iePAT`、`base64 -i<path>`、多个 `-o`、`fd --exec=`、sed 正则地址 `I/M` 标志）；
+  - `timedatectl`/`hostnamectl` 的 `set-*` 子命令判 L1、`loginctl terminate-*`/`kill-*` 判 L2、`loginctl attach/detach/flush-devices` 判 L1（三者的只读子命令仍 L0）；
   - 以上不改变本节安全姿态：L2 仍不可加白名单、L3 红线不变、表外命令仍 fail-closed 到 L2。
 
 **白名单与会话许可**：
 
-- 白名单作用域 = `(主机, 命令前缀模式)`，本地 tab 的主机记 `local`；在审批卡片点「总是允许」时生成，设置 → AI 里可查看 / 删除。
+- 白名单作用域 = `(主机, 命令前缀模式)`，其中「命令前缀模式」= 审批卡上**那条完整命令的分词序列**（tokenised argv prefix）：命中要求候选命令的分词以该序列**整词开头**——`ls` 的授权不命中 `lsof`、`git push origin main` 不命中 `git push origin +main:main`，只对**后缀追加参数**泛化；shell / 解释器 / 包装器 / `ssh` 等头（`sh -c`、`bash`、`python`、`xargs`、`watch`、`ssh` … 含经 `sudo` 的同款）**不提供授权**（这类授权会架空分级器）；命中后仍按完整命令重新判级，级别不符不自动执行。本地 tab 的主机记 `local`；在审批卡片点「总是允许」时生成，设置 → AI 里可查看 / 删除。
 - 「本会话允许」是内存态临时许可，随 tab 关闭即失效、不落盘——缓解审批疲劳的首选（Copilot CLI 的 one-time / rest-of-session 同款），比「总是允许」少留长期风险。
 - 放行优先级固定：**分级（L2 / L3）> 白名单 / 会话许可 > 默认询问**——一切放行机制只在 L1 内生效。这一条与 §5.5「只读约束未来不能放宽」同级，是不可回退的产品承诺（业界对照：Warp 的 denylist 高于包括全 Always-allow profile 在内的一切设置；Claude Code 在 auto-allow 下仍坚持 deny 规则）。
 

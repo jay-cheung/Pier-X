@@ -689,18 +689,25 @@ function ToolCard({
           <button type="button" className="btn is-compact is-primary" onClick={() => onDecide(m.callId, "allow_once")}>
             {t("Allow once")}
           </button>
-          <button type="button" className="btn is-compact" onClick={() => onDecide(m.callId, "allow_session")}>
-            {t("Allow this session")}
-          </button>
-          <button
-            type="button"
-            className="btn is-compact"
-            title={`${t("Always allow")}: ${m.alwaysPrefix ?? ""}`}
-            onClick={() => onDecide(m.callId, "allow_always")}
-          >
-            {t("Always allow")}
-            {m.alwaysPrefix ? ` “${m.alwaysPrefix}”` : ""}
-          </button>
+          {/* Standing grants are offered only when the backend supplies a
+              grant key — absent for interpreter/wrapper heads (sh/sudo
+              wrappers/…), where a grant would blanket-bypass the classifier. */}
+          {m.alwaysPrefix && (
+            <>
+              <button type="button" className="btn is-compact" onClick={() => onDecide(m.callId, "allow_session")}>
+                {t("Allow this session")}
+              </button>
+              <button
+                type="button"
+                className="btn is-compact"
+                title={`${t("Always allow")}: ${m.alwaysPrefix}`}
+                onClick={() => onDecide(m.callId, "allow_always")}
+              >
+                {t("Always allow")}
+                {` “${m.alwaysPrefix}”`}
+              </button>
+            </>
+          )}
           <button type="button" className="btn is-compact is-danger" onClick={() => onDecide(m.callId, "deny")}>
             {t("Deny")}
           </button>

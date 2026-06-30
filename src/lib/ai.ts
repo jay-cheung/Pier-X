@@ -73,7 +73,7 @@ export type AiChatRequest = {
 
 export type AiToolDecision = "allow_once" | "allow_session" | "allow_always" | "deny";
 
-export type AiWhitelistEntry = { host: string; prefix: string };
+export type AiWhitelistEntry = { host: string; prefix: string; tokens?: string[] };
 
 /** Payloads arriving on the `ai-chat` event channel (and from
  *  `aiReplay`, which returns the same shapes from the transcript). */

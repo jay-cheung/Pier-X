@@ -67,9 +67,9 @@ struct ConvState {
     running: AtomicBool,
     cancel: Mutex<Option<CancellationToken>>,
     pending: Mutex<HashMap<String, PendingTool>>,
-    /// `(host, command-prefix)` grants for THIS conversation only;
+    /// `(host, tokenised-argv-prefix)` grants for THIS conversation only;
     /// dies with the tab / app. L1 only.
-    session_allows: Mutex<Vec<(String, String)>>,
+    session_allows: Mutex<Vec<(String, Vec<String>)>>,
 }
 
 struct PendingTool {
@@ -257,7 +257,15 @@ fn build_provider_config(settings: &AiProviderSettings) -> ProviderConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AiWhitelistEntry {
     pub host: String,
+    /// Human-readable command the grant was created from (shown in
+    /// Settings → AI). Retained as the legacy match key for entries
+    /// written before `tokens` existed.
     pub prefix: String,
+    /// Tokenised argv prefix — the grant matches a candidate whose tokens
+    /// start with this whole-token sequence. Empty only for legacy entries
+    /// (then `prefix` is matched with the old `starts_with` rule).
+    #[serde(default)]
+    pub tokens: Vec<String>,
 }
 
 fn whitelist_path() -> Option<PathBuf> {
@@ -284,22 +292,148 @@ fn whitelist_save(items: &[AiWhitelistEntry]) {
     }
 }
 
-/// "Always allow" stores the first two words of the command —
-/// `systemctl restart`, `git push` — never the whole line, so a
-/// grant generalises predictably and visibly.
-fn command_prefix(command: &str) -> String {
-    command
-        .split_whitespace()
-        .take(2)
-        .collect::<Vec<_>>()
-        .join(" ")
+/// Whitespace tokens of a command — the grant key. Re-running the same
+/// command tokenises identically, so a whole-token prefix match is stable
+/// and per spec §5.14.4 "命令前缀模式" (tokenised argv prefix).
+fn command_tokens(command: &str) -> Vec<String> {
+    command.split_whitespace().map(str::to_string).collect()
+}
+
+/// Whether `candidate` begins with the whole-token sequence `prefix`
+/// (word-boundary: each token compared in full, so a grant for `ls` never
+/// matches `lsof` and `git push` never matches `git pushtags`).
+fn tokens_prefix_match(prefix: &[String], candidate: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    let cand = command_tokens(candidate);
+    cand.len() >= prefix.len() && cand[..prefix.len()] == *prefix
+}
+
+/// Heads whose grant would blanket-bypass the classifier — never offer or
+/// persist a standing grant for them (Codex `BANNED_PREFIX_SUGGESTIONS`):
+/// interpreters run arbitrary / mutable code, wrappers carry an inner
+/// command, `ssh` runs a remote command.
+const BANNED_GRANT_HEADS: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "fish",
+    "python",
+    "python3",
+    "python2",
+    "perl",
+    "ruby",
+    "node",
+    "php",
+    "lua",
+    "osascript",
+    "env",
+    "xargs",
+    "watch",
+    "timeout",
+    "nice",
+    "nohup",
+    "stdbuf",
+    "setsid",
+    "ionice",
+    "chrt",
+    "ssh",
+    "eval",
+    "exec",
+    "source",
+];
+
+/// Whether `tok` is a leading `VAR=value` environment assignment (which
+/// the shell — and the risk classifier — strip before resolving the head).
+fn is_env_assignment(tok: &str) -> bool {
+    match tok.find('=') {
+        Some(eq) if eq > 0 => {
+            let name = &tok[..eq];
+            name.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
+/// Effective command head after stripping leading `VAR=val` env-assignments
+/// and `sudo`/`doas` and their flags (including the argument of value-taking
+/// flags like `-u user`), path-stripped and lowercased. `None` for empty.
+fn effective_head(command: &str) -> Option<String> {
+    fn basename_lower(t: &str) -> String {
+        t.rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(t)
+            .trim_end_matches(".exe")
+            .to_ascii_lowercase()
+    }
+    let toks: Vec<&str> = command.split_whitespace().collect();
+    let mut i = 0;
+    loop {
+        while i < toks.len() && is_env_assignment(toks[i]) {
+            i += 1; // strip `FOO=bar` prefixes (also after sudo)
+        }
+        if i >= toks.len() {
+            break;
+        }
+        let base = basename_lower(toks[i]);
+        if base != "sudo" && base != "doas" {
+            return Some(base);
+        }
+        i += 1;
+        // Skip sudo flags; -u/--user/-g/--group/-p/-C/-r/-t/-U consume a value.
+        while i < toks.len() && toks[i].starts_with('-') {
+            let takes_value = matches!(
+                toks[i],
+                "-u" | "--user"
+                    | "-g"
+                    | "--group"
+                    | "-p"
+                    | "--prompt"
+                    | "-C"
+                    | "--close-from"
+                    | "-r"
+                    | "--role"
+                    | "-t"
+                    | "--type"
+                    | "-U"
+                    | "--other-user"
+            );
+            i += 1;
+            if takes_value && i < toks.len() {
+                i += 1;
+            }
+        }
+    }
+    // Command was only `sudo`/`doas` (+ flags), e.g. `sudo`, `sudo -i`.
+    toks.first().map(|t| basename_lower(t))
+}
+
+/// Whether a standing grant (session / always) may be offered for
+/// `command`. Refused for interpreter / wrapper heads whose grant would
+/// neuter the classifier.
+fn grant_allowed(command: &str) -> bool {
+    match effective_head(command) {
+        Some(h) => !BANNED_GRANT_HEADS.contains(&h.as_str()),
+        None => false,
+    }
 }
 
 fn whitelist_matches(host: &str, command: &str) -> bool {
-    let trimmed = command.trim_start();
-    whitelist_load()
-        .iter()
-        .any(|e| e.host == host && !e.prefix.is_empty() && trimmed.starts_with(e.prefix.as_str()))
+    whitelist_load().iter().any(|e| {
+        e.host == host
+            && if e.tokens.is_empty() {
+                // legacy entry — fall back to the old prefix rule.
+                !e.prefix.is_empty() && command.trim_start().starts_with(e.prefix.as_str())
+            } else {
+                tokens_prefix_match(&e.tokens, command)
+            }
+    })
 }
 
 // ── Transcript (audit log, §5.14.4) ────────────────────────────────
@@ -707,17 +841,25 @@ fn mcp_approve_decision(
     let auto_reason: Option<&str> = match risk.level {
         RiskLevel::L0 => Some("auto"),
         RiskLevel::L1 => {
-            let session_hit = conv.session_allows.lock().unwrap().iter().any(|(h, p)| {
-                h == target_host
-                    && !p.is_empty()
-                    && command_text.trim_start().starts_with(p.as_str())
-            });
-            if session_hit {
-                Some("session")
-            } else if !command_text.is_empty() && whitelist_matches(target_host, &command_text) {
-                Some("whitelisted")
-            } else {
+            // Never auto-run a banned interpreter / wrapper head off a
+            // standing grant — including a legacy 2-word entry that could
+            // match `sh -c …`. Such grants can no longer be created, but old
+            // whitelist files may still hold one.
+            if !grant_allowed(&command_text) {
                 None
+            } else {
+                let session_hit =
+                    conv.session_allows.lock().unwrap().iter().any(|(h, toks)| {
+                        h == target_host && tokens_prefix_match(toks, &command_text)
+                    });
+                if session_hit {
+                    Some("session")
+                } else if !command_text.is_empty() && whitelist_matches(target_host, &command_text)
+                {
+                    Some("whitelisted")
+                } else {
+                    None
+                }
             }
         }
         _ => None,
@@ -743,7 +885,12 @@ fn mcp_approve_decision(
     );
     let mut p = base_payload.clone();
     p["status"] = json!("awaiting");
-    p["alwaysPrefix"] = json!(command_prefix(&command_text));
+    // The grant is the full command (generalises only to trailing args);
+    // omit it for banned interpreter/wrapper heads so the UI hides
+    // "always allow" / "allow session".
+    if grant_allowed(&command_text) {
+        p["alwaysPrefix"] = json!(command_text);
+    }
     emit_event(app, conversation_id, "toolCall", p);
 
     let msg = rx.recv_timeout(DECISION_TIMEOUT).unwrap_or(DecisionMsg {
@@ -857,9 +1004,11 @@ pub fn ai_tool_decision(
         _ => Decision::Deny,
     };
 
-    // Enforcement, not UI convention: standing grants exist for L1 only.
-    if pending.level >= RiskLevel::L2
-        && matches!(parsed, Decision::AllowSession | Decision::AllowAlways)
+    // Enforcement, not UI convention: standing grants exist for L1 only,
+    // and never for interpreter / wrapper heads whose grant would
+    // blanket-bypass the classifier — both downgrade to a one-shot allow.
+    if matches!(parsed, Decision::AllowSession | Decision::AllowAlways)
+        && (pending.level >= RiskLevel::L2 || !grant_allowed(&pending.command))
     {
         parsed = Decision::AllowOnce;
     }
@@ -869,13 +1018,14 @@ pub fn ai_tool_decision(
             conv.session_allows
                 .lock()
                 .unwrap()
-                .push((pending.host.clone(), command_prefix(&pending.command)));
+                .push((pending.host.clone(), command_tokens(&pending.command)));
         }
         Decision::AllowAlways => {
             let mut items = whitelist_load();
             let entry = AiWhitelistEntry {
                 host: pending.host.clone(),
-                prefix: command_prefix(&pending.command),
+                prefix: pending.command.trim().to_string(),
+                tokens: command_tokens(&pending.command),
             };
             if !items.contains(&entry) {
                 items.push(entry);
@@ -1269,17 +1419,25 @@ fn handle_tool_call(
             }
         }
         RiskLevel::L1 => {
-            let session_hit = conv.session_allows.lock().unwrap().iter().any(|(h, p)| {
-                h == target_host
-                    && !p.is_empty()
-                    && command_text.trim_start().starts_with(p.as_str())
-            });
-            if session_hit {
-                Some("session")
-            } else if !command_text.is_empty() && whitelist_matches(target_host, &command_text) {
-                Some("whitelisted")
-            } else {
+            // Never auto-run a banned interpreter / wrapper head off a
+            // standing grant — including a legacy 2-word entry that could
+            // match `sh -c …`. Such grants can no longer be created, but old
+            // whitelist files may still hold one.
+            if !grant_allowed(&command_text) {
                 None
+            } else {
+                let session_hit =
+                    conv.session_allows.lock().unwrap().iter().any(|(h, toks)| {
+                        h == target_host && tokens_prefix_match(toks, &command_text)
+                    });
+                if session_hit {
+                    Some("session")
+                } else if !command_text.is_empty() && whitelist_matches(target_host, &command_text)
+                {
+                    Some("whitelisted")
+                } else {
+                    None
+                }
             }
         }
         _ => None, // L2 always asks
@@ -1306,7 +1464,12 @@ fn handle_tool_call(
         );
         let mut p = base_payload.clone();
         p["status"] = json!("awaiting");
-        p["alwaysPrefix"] = json!(command_prefix(&command_text));
+        // Grant = the full command (generalises only to trailing args);
+        // omit it for banned interpreter/wrapper heads so the UI hides
+        // "always allow" / "allow session".
+        if grant_allowed(&command_text) {
+            p["alwaysPrefix"] = json!(command_text);
+        }
         emit_event(app, conversation_id, "toolCall", p);
 
         let msg = rx.recv_timeout(DECISION_TIMEOUT).unwrap_or(DecisionMsg {
@@ -1662,5 +1825,108 @@ fn cli_system_prompt(context: &AiContext, native: bool) -> String {
         format!(
             "You are the Pier-X assistant, embedded in a terminal / SSH / database tool for backend and ops engineers. In THIS mode you have NO tools: you cannot run commands or edit files — you only explain and propose. When you suggest a shell command or SQL, put each one alone in a fenced code block (the UI shows an insert-into-terminal button); never claim you executed anything. Current tab context (may be empty): tab={backend} {host}, os={os}, cwd={cwd}. Keep answers short and concrete; lead with the conclusion. Respond in the user's language (locale: {locale})."
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(s: &str) -> Vec<String> {
+        command_tokens(s)
+    }
+
+    #[test]
+    fn token_prefix_match_respects_word_boundaries() {
+        // exact + trailing-arg generalisation
+        assert!(tokens_prefix_match(&toks("git push"), "git push"));
+        assert!(tokens_prefix_match(
+            &toks("git push"),
+            "git push origin main"
+        ));
+        // word boundary: a prefix token must match a WHOLE token
+        assert!(!tokens_prefix_match(&toks("ls"), "lsof"));
+        assert!(!tokens_prefix_match(&toks("git push"), "git pushtags"));
+        // a different object does not ride in on a shorter prefix
+        assert!(tokens_prefix_match(
+            &toks("systemctl restart nginx"),
+            "systemctl restart nginx"
+        ));
+        assert!(!tokens_prefix_match(
+            &toks("systemctl restart nginx"),
+            "systemctl restart sshd"
+        ));
+        // candidate shorter than the grant never matches
+        assert!(!tokens_prefix_match(
+            &toks("git push origin main"),
+            "git push"
+        ));
+        // empty prefix never matches
+        assert!(!tokens_prefix_match(&[], "anything"));
+    }
+
+    #[test]
+    fn full_command_grant_blocks_refspec_force_push() {
+        // grant for `git push origin main` must NOT auto-run a refspec
+        // force-push that classify_git happens to rate L1.
+        let grant = toks("git push origin main");
+        assert!(tokens_prefix_match(&grant, "git push origin main"));
+        assert!(!tokens_prefix_match(&grant, "git push origin +main:main"));
+    }
+
+    #[test]
+    fn banned_grant_heads_are_refused() {
+        // interpreters / wrappers / ssh — even through sudo
+        assert!(!grant_allowed("sh -c 'systemctl restart nginx'"));
+        assert!(!grant_allowed("bash deploy.sh"));
+        assert!(!grant_allowed("python3 manage.py migrate"));
+        assert!(!grant_allowed("sudo sh -c 'rm x'"));
+        assert!(!grant_allowed("watch systemctl restart nginx"));
+        assert!(!grant_allowed("ssh host rm -rf /"));
+        assert!(!grant_allowed("env LD_PRELOAD=x ls"));
+        assert!(!grant_allowed("ionice -c3 systemctl restart nginx"));
+        assert!(!grant_allowed("chrt -b 0 systemctl restart nginx"));
+        // env-assignment prefix must not hide a banned interpreter head
+        assert!(!grant_allowed("FOO=1 bash -c 'systemctl restart nginx'"));
+        assert!(!grant_allowed("FOO=1 sudo bash deploy.sh"));
+        assert!(!grant_allowed("X=1 watch ls"));
+        // ordinary commands (incl. via sudo / env prefix) may be granted
+        assert!(grant_allowed("systemctl restart nginx"));
+        assert!(grant_allowed("sudo systemctl restart nginx"));
+        assert!(grant_allowed("FOO=1 systemctl restart nginx"));
+        assert!(grant_allowed("git push origin main"));
+        assert!(!grant_allowed(""));
+    }
+
+    #[test]
+    fn effective_head_strips_sudo() {
+        assert_eq!(
+            effective_head("sudo systemctl restart x").as_deref(),
+            Some("systemctl")
+        );
+        assert_eq!(effective_head("sudo -n -u root ls").as_deref(), Some("ls"));
+        assert_eq!(effective_head("/usr/bin/git push").as_deref(), Some("git"));
+        assert_eq!(effective_head("sudo").as_deref(), Some("sudo"));
+    }
+
+    #[test]
+    fn legacy_prefix_entries_still_match() {
+        // a pre-tokens entry (tokens empty) falls back to the old rule.
+        let legacy = AiWhitelistEntry {
+            host: "h".into(),
+            prefix: "systemctl restart".into(),
+            tokens: Vec::new(),
+        };
+        // simulate whitelist_matches' per-entry logic
+        let hit = legacy.host == "h"
+            && if legacy.tokens.is_empty() {
+                !legacy.prefix.is_empty()
+                    && "systemctl restart nginx"
+                        .trim_start()
+                        .starts_with(legacy.prefix.as_str())
+            } else {
+                tokens_prefix_match(&legacy.tokens, "systemctl restart nginx")
+            };
+        assert!(hit);
     }
 }
