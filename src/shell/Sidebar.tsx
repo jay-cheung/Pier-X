@@ -2,6 +2,8 @@ import {
   ArrowLeft,
   ArrowUp,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Download,
   FileText,
   Folder,
@@ -1365,6 +1367,39 @@ function normalizePath(path: string): string {
   return stripped || "/";
 }
 
+// Group expand/collapse persists across launches. With many groups
+// the user curates which stay open; resetting to all-expanded every
+// restart defeats that. Stored as a sparse key→bool map — groups
+// absent from the map default to expanded, so newly-added groups show
+// their servers without needing a stored entry.
+const SRV_GROUP_EXPAND_STORAGE_KEY = "pierx:srv-group-expanded";
+
+function readGroupExpandState(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SRV_GROUP_EXPAND_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "boolean") out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeGroupExpandState(state: Record<string, boolean>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SRV_GROUP_EXPAND_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    /* ignore quota / serialization errors */
+  }
+}
+
 function ServersPane({
   connections,
   serverSearch,
@@ -1429,7 +1464,7 @@ function ServersPane({
     return map;
   }, [connections, tabs, byTab]);
 
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(readGroupExpandState);
   const [openRow, setOpenRow] = useState<number | null>(null);
   // Pending = user-created placeholder that only lives in this UI
   // session until the user confirms its name (and, for empty pending
@@ -1465,6 +1500,10 @@ function ServersPane({
       return changed ? next : prev;
     });
   }, [groups]);
+
+  useEffect(() => {
+    writeGroupExpandState(expanded);
+  }, [expanded]);
 
   // Pending group is rendered separately from `groups` so its
   // transient state (empty name while editing) doesn't collide with
@@ -1666,6 +1705,19 @@ function ServersPane({
     setExpanded((prev) => ({ ...prev, [trimmed]: true }));
   };
 
+  // Collapse-all / expand-all toggle. "All collapsed" means every
+  // shown group is closed; the button then flips to expand-all.
+  const allCollapsed =
+    groups.length > 0 && groups.every((g) => !(expanded[g.key] ?? true));
+  const toggleAllGroups = () => {
+    const shouldExpand = allCollapsed;
+    setExpanded((prev) => {
+      const next = { ...prev };
+      for (const g of groups) next[g.key] = shouldExpand;
+      return next;
+    });
+  };
+
   return (
     <>
       <div className="sidebar-toolbar">
@@ -1703,6 +1755,15 @@ function ServersPane({
           disabled={connections.length === 0}
         >
           <Download />
+        </button>
+        <button
+          className="mini-btn"
+          onClick={toggleAllGroups}
+          title={allCollapsed ? t("Expand all groups") : t("Collapse all groups")}
+          type="button"
+          disabled={groups.length === 0}
+        >
+          {allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
         </button>
         <button className="mini-btn" onClick={onRefresh} title={t("Refresh")} type="button"><RefreshCw /></button>
       </div>
@@ -2080,12 +2141,14 @@ function ServerItem({
           <div className="srv-name">{conn.display}</div>
           <div className="srv-addr">{addr}</div>
         </div>
-        <span
-          className={"srv-proto srv-proto--" + protoKind}
-          title={`${t("Protocol")}: ${protoLabel}`}
-        >
-          {protoLabel}
-        </span>
+        {isRemoteDesktop && (
+          <span
+            className={"srv-proto srv-proto--" + protoKind}
+            title={`${t("Protocol")}: ${protoLabel}`}
+          >
+            {protoLabel}
+          </span>
+        )}
         {!isRemoteDesktop && (
           <span className="srv-auth" title={`${t("Authentication")}: ${authLabel}`}>
             <AuthIcon size={10} />

@@ -215,6 +215,8 @@
   "Connection group": "连接分组",
   "New group": "新建分组",
   "New group…": "新建分组…",
+  "Collapse all groups": "全部收起",
+  "Expand all groups": "全部展开",
   "New group name": "分组名称",
   "Rename group": "重命名分组",
   "Delete group": "删除分组",

@@ -995,7 +995,7 @@ button,
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 .srv-row {
-  padding: var(--sp-1-5) var(--sp-2-5) var(--sp-1-5) var(--srv-tree-indent-server);
+  padding: var(--sp-1) var(--sp-2-5) var(--sp-1) var(--srv-tree-indent-server);
   display: flex;
   align-items: center;
   gap: var(--sp-1);
@@ -1022,38 +1022,54 @@ button,
   opacity: 0.55;
 }
 
-.srv-body { flex: 1; min-width: 0; }
+/* Single-line row: name (left) and address (pushed right, mono, dimmed)
+ * share one baseline so the connection reads as one scannable line
+ * instead of a two-line stack. The name carries the identity, so it
+ * keeps its natural width on the left; the address recedes on the
+ * right and truncates first when space is tight. */
+.srv-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
 .srv-name {
   font-family: var(--sans);
   font-size: var(--ui-fs);
   color: var(--ink);
   font-weight: var(--weight-medium);
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.srv-item.offline .srv-name { color: var(--muted); }
+/* Offline is a saved connection's default state, so dimming the name
+ * to --muted washed out the whole list. Status lives in the dot; the
+ * name stays legible (one notch down to --ink-2) at all times. */
+.srv-item.offline .srv-name { color: var(--ink-2); }
 .srv-addr {
-  font-size: var(--ui-fs-sm);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  font-size: var(--size-micro);
   color: var(--muted);
   font-family: var(--mono);
-  margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Auth hint: a bare glyph, not a boxed chip. Every SSH row carries
+ * one, so the box was 14× repeated chrome; the dim icon conveys
+ * key / password / agent without drawing a border on every line. */
 .srv-auth {
   flex: none;
-  width: 18px;
-  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--muted);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius-xs);
-  background: var(--panel);
+  color: var(--dim);
 }
+.srv-row:hover .srv-auth { color: var(--muted); }
 
 /* Connection protocol chip — SSH / RDP / VNC at a glance. Static
  * to the connection (never dims with offline status). RDP + VNC
@@ -1089,15 +1105,14 @@ button,
   border-color: color-mix(in srgb, var(--proto-vnc) 38%, transparent);
 }
 
+/* Actions stay visible on every row (connect / edit / delete). The
+ * mini-btn default is a muted glyph, so they read as a quiet trailing
+ * cluster and only light up (bg + ink) on direct hover. */
 .srv-actions {
   display: flex;
   gap: 2px;
   padding-left: var(--sp-1);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--easing);
 }
-.srv-row:hover .srv-actions,
-.srv-item.active .srv-actions { opacity: 1; }
 
 /* Drag-and-drop affordances */
 
